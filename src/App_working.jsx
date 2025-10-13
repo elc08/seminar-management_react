@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getData as getCountryData } from 'country-list';
 import { 
   signInWithEmailAndPassword, 
   signOut, 
@@ -23,27 +22,6 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-
-
-// Get all countries and organize them
-const allCountriesFromPackage = getCountryData().map(c => c.name).sort();
-
-const europeanCountries = [
-  'Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic',
-  'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece',
-  'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg',
-  'Malta', 'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia',
-  'Slovenia', 'Sweden', 'Switzerland', 'United Kingdom'
-].sort();
-
-const COUNTRIES = [
-  'Spain',
-  '--- European Countries ---',
-  ...europeanCountries,
-  '--- Other Countries ---',
-  ...allCountriesFromPackage.filter(c => c !== 'Spain' && !europeanCountries.includes(c))
-];
 
 const App = () => {
   // Auth & User State
@@ -74,9 +52,10 @@ const App = () => {
   
   // Signup Token Access
   const [signupInvitation, setSignupInvitation] = useState(null);
+  // eslint-disable-next-line
   const [loadingSignup, setLoadingSignup] = useState(false);
 
-  // Load data functions
+  // Load data functions - defined first
   const loadSpeakers = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, 'speakers'));
@@ -131,6 +110,7 @@ const App = () => {
     }
   }, []);
 
+  // Load all data
   const loadData = useCallback(async () => {
     await Promise.all([
       loadSpeakers(),
@@ -141,6 +121,7 @@ const App = () => {
     ]);
   }, [loadSpeakers, loadAvailableDates, loadInvitations, loadSeniorFellows, loadAllUsers]);
 
+  // Load speaker by token
   const loadSpeakerByToken = useCallback(async (token) => {
     try {
       const speakersRef = collection(db, 'speakers');
@@ -159,6 +140,7 @@ const App = () => {
     }
   }, [loadAvailableDates]);
 
+  // Load user role
   const loadUserRole = useCallback(async (uid) => {
     try {
       const userDoc = await getDoc(doc(db, 'user_roles', uid));
@@ -171,6 +153,7 @@ const App = () => {
     }
   }, [loadData]);
 
+  // Check for speaker token in URL
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
@@ -179,43 +162,46 @@ const App = () => {
     }
   }, [loadSpeakerByToken]);
 
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const signupToken = urlParams.get('signup');
-    if (signupToken && !user) {
-      setLoadingSignup(true);
-      const loadSignupInvitation = async () => {
-        try {
-          const invitationsRef = collection(db, 'invitations');
-          const q = query(invitationsRef, where('token', '==', signupToken), where('used', '==', false));
-          const querySnapshot = await getDocs(q);
+// Check for signup token in URL (add this after the speaker token useEffect)
+useEffect(() => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const signupToken = urlParams.get('signup');
+  if (signupToken && !user) {
+    setLoadingSignup(true);
+    const loadSignupInvitation = async () => {
+      try {
+        const invitationsRef = collection(db, 'invitations');
+        const q = query(invitationsRef, where('token', '==', signupToken), where('used', '==', false));
+        const querySnapshot = await getDocs(q);
+        
+        if (!querySnapshot.empty) {
+          const invDoc = querySnapshot.docs[0];
+          const invitation = { id: invDoc.id, ...invDoc.data() };
           
-          if (!querySnapshot.empty) {
-            const invDoc = querySnapshot.docs[0];
-            const invitation = { id: invDoc.id, ...invDoc.data() };
-            
-            const expiresAt = invitation.expires_at.toDate();
-            if (expiresAt < new Date()) {
-              alert('This invitation has expired. Please contact the organizer for a new invitation.');
-              setLoadingSignup(false);
-              return;
-            }
-            
-            setSignupInvitation(invitation);
-          } else {
-            alert('Invalid or already used invitation link.');
+          // Check if expired
+          const expiresAt = invitation.expires_at.toDate();
+          if (expiresAt < new Date()) {
+            alert('This invitation has expired. Please contact the organizer for a new invitation.');
+            setLoadingSignup(false);
+            return;
           }
-          setLoadingSignup(false);
-        } catch (error) {
-          console.error('Error loading invitation:', error);
-          alert('Error loading invitation. Please try again.');
-          setLoadingSignup(false);
+          
+          setSignupInvitation(invitation);
+        } else {
+          alert('Invalid or already used invitation link.');
         }
-      };
-      loadSignupInvitation();
-    }
-  }, [user]);
+        setLoadingSignup(false);
+      } catch (error) {
+        console.error('Error loading invitation:', error);
+        alert('Error loading invitation. Please try again.');
+        setLoadingSignup(false);
+      }
+    };
+    loadSignupInvitation();
+  }
+}, [user]);
 
+  // Auth listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
@@ -230,6 +216,7 @@ const App = () => {
     return unsubscribe;
   }, [loadUserRole]);
 
+  // Login
   const handleLogin = async (email, password) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
@@ -238,16 +225,19 @@ const App = () => {
     }
   };
 
+  // Signup from invitation
   const handleSignup = async (password) => {
     if (!signupInvitation) return;
     
     try {
+      // Create user in Firebase Authentication
       const userCredential = await createUserWithEmailAndPassword(
         auth, 
         signupInvitation.email, 
         password
       );
       
+      // Add user to user_roles collection
       await setDoc(doc(db, 'user_roles', userCredential.user.uid), {
         email: signupInvitation.email,
         full_name: signupInvitation.full_name,
@@ -255,12 +245,16 @@ const App = () => {
         createdAt: serverTimestamp()
       });
       
+      // Mark invitation as used
       await updateDoc(doc(db, 'invitations', signupInvitation.id), {
         used: true,
         used_at: serverTimestamp()
       });
       
+      // Clear signup state - user will be logged in automatically
       setSignupInvitation(null);
+      
+      // Remove token from URL
       window.history.replaceState({}, document.title, window.location.pathname);
       
     } catch (error) {
@@ -272,6 +266,7 @@ const App = () => {
     }
   };
 
+  // Logout
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -280,28 +275,12 @@ const App = () => {
     }
   };
 
-  // Add Date with duplicate check and optional host
+  // Add Available Date
   const handleAddDate = async (formData) => {
     try {
-      const newDate = new Date(formData.date);
-      const newDateString = newDate.toISOString().split('T')[0];
-      
-      // Check for duplicate dates
-      const duplicateDate = availableDates.find(d => {
-        if (d.locked_by_id === 'DELETED') return false;
-        const existingDate = d.date.toDate ? d.date.toDate() : new Date(d.date);
-        const existingDateString = existingDate.toISOString().split('T')[0];
-        return existingDateString === newDateString;
-      });
-      
-      if (duplicateDate) {
-        alert(`This date (${formatDate(duplicateDate.date)}) already exists in the system. Please choose a different date.`);
-        return;
-      }
-      
       await addDoc(collection(db, 'available_dates'), {
         ...formData,
-        date: Timestamp.fromDate(newDate),
+        date: Timestamp.fromDate(new Date(formData.date)),
         available: true,
         locked_by_id: null,
         createdAt: serverTimestamp()
@@ -313,6 +292,7 @@ const App = () => {
     }
   };
 
+  // Delete Available Date
   const handleDeleteDate = async (dateId) => {
     const date = availableDates.find(d => d.id === dateId);
     if (date && !date.available) {
@@ -334,7 +314,7 @@ const App = () => {
     }
   };
 
-  // Add Speaker with country field
+  // Add Speaker (Propose)
   const handleAddSpeaker = async (formData) => {
     try {
       const token = generateToken();
@@ -353,18 +333,20 @@ const App = () => {
     }
   };
 
-  const handleDeleteSpeaker = async (speakerId) => {
-    if (window.confirm('Are you sure you want to delete this speaker proposal?')) {
-      try {
-        await deleteDoc(doc(db, 'speakers', speakerId));
-        await loadSpeakers();
-        alert('Speaker deleted successfully!');
-      } catch (error) {
-        alert('Error deleting speaker: ' + error.message);
-      }
+// Delete Proposed Speaker
+const handleDeleteSpeaker = async (speakerId) => {
+  if (window.confirm('Are you sure you want to delete this speaker proposal?')) {
+    try {
+      await deleteDoc(doc(db, 'speakers', speakerId));
+      await loadSpeakers();
+      alert('Speaker deleted successfully!');
+    } catch (error) {
+      alert('Error deleting speaker: ' + error.message);
     }
-  };
+  }
+};
 
+  // Accept Speaker (Organizer)
   const handleAcceptSpeaker = async (speakerId) => {
     try {
       const speaker = speakers.find(s => s.id === speakerId);
@@ -377,6 +359,7 @@ const App = () => {
         response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
       });
       
+      // Generate invitation email content
       const inviteLink = `${window.location.origin}?token=${token}`;
       const emailSubject = 'Invitation to Present at Collaboratorium Barcelona';
       const emailBody = `Dear ${speaker.full_name},
@@ -393,7 +376,10 @@ This invitation will remain valid for 7 days. If you have any questions, please 
 Best regards,
 ${userRole.full_name}`;
 
+      // Create mailto link
       const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      
+      // Open email client
       window.location.href = mailtoLink;
       
       await loadSpeakers();
@@ -403,6 +389,7 @@ ${userRole.full_name}`;
     }
   };
 
+  // Reject Speaker
   const handleRejectSpeaker = async (speakerId) => {
     if (window.confirm('Are you sure you want to reject this speaker?')) {
       try {
@@ -416,6 +403,7 @@ ${userRole.full_name}`;
     }
   };
 
+  // Edit Proposed Speaker
   const handleEditSpeaker = async (formData) => {
     try {
       await updateDoc(doc(db, 'speakers', editingSpeaker.id), formData);
@@ -427,6 +415,7 @@ ${userRole.full_name}`;
     }
   };
 
+  // Edit Confirmed Speaker
   const handleEditConfirmedSpeaker = async (formData) => {
     try {
       const updateData = {
@@ -436,19 +425,23 @@ ${userRole.full_name}`;
       
       await updateDoc(doc(db, 'speakers', editingSpeaker.id), updateData);
       
+      // If date changed, update the locked date
       if (formData.old_date_id && formData.new_date_id && formData.old_date_id !== formData.new_date_id) {
+        // Unlock old date
         await updateDoc(doc(db, 'available_dates', formData.old_date_id), {
           available: true,
           locked_by_id: null,
           talk_title: ''
         });
         
+        // Lock new date
         await updateDoc(doc(db, 'available_dates', formData.new_date_id), {
           available: false,
           locked_by_id: editingSpeaker.id,
           talk_title: formData.talk_title
         });
       } else if (formData.current_date_id) {
+        // Just update the talk title on existing date
         await updateDoc(doc(db, 'available_dates', formData.current_date_id), {
           talk_title: formData.talk_title
         });
@@ -463,15 +456,17 @@ ${userRole.full_name}`;
     }
   };
 
-  // Speaker accepts invitation - creates agenda
+  // Speaker accepts invitation
   const handleSpeakerAccept = async (dateId, talkTitle, talkAbstract) => {
     try {
+      // Lock the date
       await updateDoc(doc(db, 'available_dates', dateId), {
         available: false,
         locked_by_id: speakerAccess.id,
         talk_title: talkTitle
       });
 
+      // Update speaker
       const selectedDate = availableDates.find(d => d.id === dateId);
       await updateDoc(doc(db, 'speakers', speakerAccess.id), {
         status: 'Accepted',
@@ -480,27 +475,9 @@ ${userRole.full_name}`;
         talk_abstract: talkAbstract || ''
       });
 
-      // Create agenda for the visit
-      const visitDate = selectedDate.date.toDate();
-      const dayBefore = new Date(visitDate);
-      dayBefore.setDate(dayBefore.getDate() - 1);
-      const dayAfter = new Date(visitDate);
-      dayAfter.setDate(dayAfter.getDate() + 1);
-
-      await addDoc(collection(db, 'agendas'), {
-        speaker_id: speakerAccess.id,
-        speaker_name: speakerAccess.full_name,
-        speaker_email: speakerAccess.email,
-        host: selectedDate.host,
-        seminar_date: selectedDate.date,
-        start_date: Timestamp.fromDate(dayBefore),
-        end_date: Timestamp.fromDate(dayAfter),
-        meetings: [],
-        createdAt: serverTimestamp()
-      });
-
-      alert('Thank you! Your presentation has been scheduled. The organizers will contact you shortly regarding travel arrangements and to coordinate meetings.');
+      alert('Thank you! Your presentation has been scheduled. The organizers will contact you shortly regarding travel arrangements.');
       
+      // Reload data
       await loadAvailableDates();
       setSpeakerAccess({ ...speakerAccess, status: 'Accepted' });
     } catch (error) {
@@ -508,6 +485,7 @@ ${userRole.full_name}`;
     }
   };
 
+  // Speaker declines invitation
   const handleSpeakerDecline = async () => {
     if (window.confirm('Are you sure you want to decline this invitation?')) {
       try {
@@ -522,10 +500,12 @@ ${userRole.full_name}`;
     }
   };
 
+  // Generate random token
   const generateToken = () => {
     return Math.random().toString(36).substring(2) + Date.now().toString(36);
   };
 
+  // Create invitation for Senior Fellow
   const handleCreateInvitation = async (formData) => {
     try {
       const token = generateToken();
@@ -541,6 +521,7 @@ ${userRole.full_name}`;
         createdAt: serverTimestamp()
       });
 
+      // Create email
       const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
       const emailBody = `Dear ${formData.full_name},
 
@@ -554,7 +535,10 @@ This invitation will remain valid for 30 days.
 Best regards,
 ${userRole.full_name}`;
 
+      // Create mailto link
       const mailtoLink = `mailto:${formData.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      
+      // Open email client
       window.location.href = mailtoLink;
 
       await loadInvitations();
@@ -565,6 +549,7 @@ ${userRole.full_name}`;
     }
   };
 
+  // Edit existing user
   const handleEditUser = async (formData) => {
     try {
       await updateDoc(doc(db, 'user_roles', editingUser.id), {
@@ -581,13 +566,14 @@ ${userRole.full_name}`;
     }
   };
 
+  // Delete user
   const handleDeleteUser = async (userId, userEmail) => {
     if (userId === user.uid) {
       alert('You cannot delete your own account!');
       return;
     }
 
-    if (window.confirm(`Are you sure you want to remove ${userEmail} from the system?`)) {
+    if (window.confirm(`Are you sure you want to remove ${userEmail} from the system? This will remove their access but not delete their authentication account.`)) {
       try {
         await deleteDoc(doc(db, 'user_roles', userId));
         await loadAllUsers();
@@ -599,17 +585,19 @@ ${userRole.full_name}`;
     }
   };
 
+  // Send password reset email
   const handlePasswordReset = async (email) => {
     if (window.confirm(`Send password reset email to ${email}?`)) {
       try {
         await sendPasswordResetEmail(auth, email);
-        alert(`Password reset email sent to ${email}.`);
+        alert(`Password reset email sent to ${email}. They should receive it shortly.`);
       } catch (error) {
         alert('Error sending password reset email: ' + error.message);
       }
     }
   };
 
+  // Get ranking color
   const getRankingColor = (ranking) => {
     switch (ranking) {
       case 'High Priority': return '#ff4444';
@@ -619,6 +607,7 @@ ${userRole.full_name}`;
     }
   };
 
+  // Get status color
   const getStatusColor = (status) => {
     switch (status) {
       case 'Proposed': return '#999';
@@ -629,21 +618,28 @@ ${userRole.full_name}`;
     }
   };
 
+  // Format date
   const formatDate = (timestamp) => {
     if (!timestamp) return 'N/A';
     const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
     return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   };
 
+  // If loading (but not if we have a signup invitation ready)
   if ((loading || loadingSignup) && !signupInvitation) {
+    console.log('Showing loading screen', { loading, loadingSignup, hasSignupInvitation: !!signupInvitation });
     return <div style={styles.loading}>Loading...</div>;
   }
 
+  // Signup View (from invitation link) - HIGHEST PRIORITY
   if (signupInvitation && !user) {
+    console.log('Showing signup view');
     return <SignupView invitation={signupInvitation} onSignup={handleSignup} />;
   }
 
+  // Speaker Access View (no login required)
   if (speakerAccess) {
+    console.log('Showing speaker access view');
     return <SpeakerAccessView 
       speaker={speakerAccess}
       availableDates={availableDates}
@@ -653,16 +649,22 @@ ${userRole.full_name}`;
     />;
   }
 
+  // Login View
   if (!user) {
+    console.log('Showing login view');
     return <LoginView onLogin={handleLogin} />;
   }
 
+  // Loading user role after login
   if (user && !userRole) {
+    console.log('Loading user data');
     return <div style={styles.loading}>Loading user data...</div>;
   }
 
+  // Main Dashboard
   return (
     <div style={styles.container}>
+      {/* Header */}
       <div style={styles.header}>
         <h1 style={styles.title}>Seminar Management System</h1>
         <div style={styles.userInfo}>
@@ -671,16 +673,12 @@ ${userRole.full_name}`;
         </div>
       </div>
 
+      {/* Navigation */}
       <div style={styles.nav}>
         <button 
           onClick={() => setActiveTab('dashboard')} 
           style={{...styles.navBtn, ...(activeTab === 'dashboard' ? styles.navBtnActive : {})}}>
           Dashboard
-        </button>
-        <button 
-          onClick={() => setActiveTab('statistics')} 
-          style={{...styles.navBtn, ...(activeTab === 'statistics' ? styles.navBtnActive : {})}}>
-          Past Speakers
         </button>
         {userRole?.role === 'Organizer' && (
           <>
@@ -720,7 +718,9 @@ ${userRole.full_name}`;
         )}
       </div>
 
+      {/* Content Area */}
       <div style={styles.content}>
+        {/* Dashboard */}
         {activeTab === 'dashboard' && (
           <DashboardView 
             userRole={userRole}
@@ -742,10 +742,7 @@ ${userRole.full_name}`;
           />
         )}
 
-        {activeTab === 'statistics' && (
-          <StatisticsView speakers={speakers} formatDate={formatDate} />
-        )}
-
+        {/* Available Dates (Organizer) */}
         {activeTab === 'dates' && userRole?.role === 'Organizer' && (
           <DatesView 
             dates={availableDates.filter(d => d.locked_by_id !== 'DELETED')}
@@ -756,6 +753,7 @@ ${userRole.full_name}`;
           />
         )}
 
+        {/* All Speakers (Organizer) */}
         {activeTab === 'speakers' && userRole?.role === 'Organizer' && (
           <AllSpeakersView 
             speakers={speakers}
@@ -765,6 +763,7 @@ ${userRole.full_name}`;
           />
         )}
 
+        {/* Manage Users (Organizer) */}
         {activeTab === 'users' && userRole?.role === 'Organizer' && (
           <ManageUsersView 
             users={allUsers}
@@ -779,6 +778,7 @@ ${userRole.full_name}`;
           />
         )}
 
+        {/* User Invitations (Organizer) */}
         {activeTab === 'invitations' && userRole?.role === 'Organizer' && (
           <InvitationsView 
             invitations={invitations}
@@ -787,15 +787,11 @@ ${userRole.full_name}`;
           />
         )}
 
+        {/* Propose Speaker (Organizer & Senior Fellow) */}
         {activeTab === 'propose' && (
           <ProposeSpeakerView 
             onAddSpeaker={() => setShowAddSpeakerForm(true)}
             speakers={speakers.filter(s => s.proposed_by_id === user.uid)}
-            onEditSpeaker={(speaker) => {
-              setEditingSpeaker(speaker);
-              setShowEditSpeakerForm(true);
-            }}
-            onDeleteSpeaker={handleDeleteSpeaker}
             getRankingColor={getRankingColor}
             getStatusColor={getStatusColor}
             formatDate={formatDate}
@@ -803,6 +799,7 @@ ${userRole.full_name}`;
         )}
       </div>
 
+      {/* Add Date Modal */}
       {showAddDateForm && (
         <AddDateForm 
           onSubmit={handleAddDate}
@@ -812,16 +809,17 @@ ${userRole.full_name}`;
         />
       )}
 
+      {/* Add Speaker Modal */}
       {showAddSpeakerForm && (
         <AddSpeakerForm 
           onSubmit={handleAddSpeaker}
           onCancel={() => setShowAddSpeakerForm(false)}
           seniorFellows={seniorFellows}
           currentUser={userRole}
-          countries={COUNTRIES}
         />
       )}
 
+      {/* Edit Speaker Modal */}
       {showEditSpeakerForm && editingSpeaker && (
         <EditSpeakerForm 
           speaker={editingSpeaker}
@@ -831,10 +829,10 @@ ${userRole.full_name}`;
             setEditingSpeaker(null);
           }}
           seniorFellows={seniorFellows}
-          countries={COUNTRIES}
         />
       )}
 
+      {/* Edit Confirmed Speaker Modal */}
       {showEditConfirmedForm && editingSpeaker && (
         <EditConfirmedSpeakerForm 
           speaker={editingSpeaker}
@@ -848,6 +846,7 @@ ${userRole.full_name}`;
         />
       )}
 
+      {/* Invite User Modal */}
       {showInviteUserForm && (
         <InviteUserForm 
           onSubmit={handleCreateInvitation}
@@ -855,6 +854,7 @@ ${userRole.full_name}`;
         />
       )}
 
+      {/* Edit User Modal */}
       {showEditUserForm && editingUser && (
         <EditUserForm 
           user={editingUser}
@@ -865,816 +865,6 @@ ${userRole.full_name}`;
           }}
         />
       )}
-    </div>
-  );
-};
-
-// Statistics/Past Speakers View Component
-const StatisticsView = ({ speakers, formatDate }) => {
-  const acceptedSpeakers = speakers.filter(s => s.status === 'Accepted');
-  
-  const getYearFromDate = (date) => {
-    if (!date) return null;
-    const d = date.toDate ? date.toDate() : new Date(date);
-    return d.getFullYear();
-  };
-
-  const speakersByYear = acceptedSpeakers.reduce((acc, s) => {
-    const year = getYearFromDate(s.assigned_date);
-    if (year) {
-      if (!acc[year]) acc[year] = [];
-      acc[year].push(s);
-    }
-    return acc;
-  }, {});
-
-  const yearData = Object.keys(speakersByYear)
-    .sort()
-    .map(year => ({
-      year,
-      count: speakersByYear[year].length
-    }));
-
-  const countryData = acceptedSpeakers.reduce((acc, s) => {
-    const country = s.country || 'Unknown';
-    acc[country] = (acc[country] || 0) + 1;
-    return acc;
-  }, {});
-
-  const topCountries = Object.entries(countryData)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([country, count]) => ({ country, count }));
-
-  const getRegion = (country) => {
-    if (!country) return 'Unknown';
-    if (country === 'Spain') return 'Spain';
-    
-    const europeanCountries = ['Austria', 'Belgium', 'Denmark', 'France', 'Germany', 'Italy', 
-      'Netherlands', 'Switzerland', 'United Kingdom', 'Sweden', 'Norway', 'Bulgaria', 'Croatia', 
-      'Cyprus', 'Czech Republic', 'Estonia', 'Finland', 'Greece', 'Hungary', 'Ireland', 'Latvia', 
-      'Lithuania', 'Luxembourg', 'Malta', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia'];
-    if (europeanCountries.includes(country)) return 'Europe (excl. Spain)';
-    
-    const northAmerica = ['United States', 'Canada', 'Mexico'];
-    if (northAmerica.includes(country)) return 'North America';
-    
-    const asia = ['China', 'Japan', 'India', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines'];
-    if (asia.includes(country)) return 'Asia';
-    
-    const oceania = ['Australia', 'New Zealand'];
-    if (oceania.includes(country)) return 'Oceania';
-    
-    return 'Other';
-  };
-
-  const regionData = acceptedSpeakers.reduce((acc, s) => {
-    const region = getRegion(s.country);
-    acc[region] = (acc[region] || 0) + 1;
-    return acc;
-  }, {});
-
-  const regionChartData = Object.entries(regionData).map(([region, count]) => ({
-    name: region,
-    value: count
-  }));
-
-  const COLORS = ['#d63447', '#3498db', '#e67e22', '#f1c40f', '#2ecc71', '#95a5a6'];
-
-  return (
-    <div>
-      <h2 style={styles.sectionTitle}>Past Speakers</h2>
-      
-      <div style={styles.statsGrid}>
-        <div style={styles.statCard}>
-          <div style={styles.statNumber}>{acceptedSpeakers.length}</div>
-          <div style={styles.statLabel}>Total Speakers</div>
-        </div>
-        <div style={styles.statCard}>
-          <div style={styles.statNumber}>{Object.keys(countryData).length}</div>
-          <div style={styles.statLabel}>Countries</div>
-        </div>
-        <div style={styles.statCard}>
-          <div style={styles.statNumber}>{Object.keys(speakersByYear).length}</div>
-          <div style={styles.statLabel}>Years</div>
-        </div>
-      </div>
-
-      <div style={styles.chartsGrid}>
-        <div style={styles.chartBox}>
-          <h3 style={styles.chartTitle}>Speakers by Year</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={yearData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="year" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="count" fill="#3498db" radius={[8, 8, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div style={styles.chartBox}>
-          <h3 style={styles.chartTitle}>Distribution by Region</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={regionChartData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {regionChartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>Top 10 Countries</h3>
-        <ResponsiveContainer width="100%" height={400}>
-          <BarChart data={topCountries} layout="vertical">
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis type="number" />
-            <YAxis dataKey="country" type="category" width={150} />
-            <Tooltip />
-            <Bar dataKey="count" fill="#00BCD4" radius={[0, 8, 8, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>All Speakers by Year</h3>
-        {Object.keys(speakersByYear).sort((a, b) => b - a).map(year => (
-          <div key={year} style={styles.yearSection}>
-            <h4 style={styles.yearTitle}>{year} ({speakersByYear[year].length} speakers)</h4>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Affiliation</th>
-                  <th style={styles.th}>Country</th>
-                  <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Talk Title</th>
-                </tr>
-              </thead>
-              <tbody>
-                {speakersByYear[year]
-                  .sort((a, b) => {
-                    const dateA = a.assigned_date?.toDate ? a.assigned_date.toDate() : new Date(a.assigned_date);
-                    const dateB = b.assigned_date?.toDate ? b.assigned_date.toDate() : new Date(b.assigned_date);
-                    return dateA - dateB;
-                  })
-                  .map(speaker => (
-                    <tr key={speaker.id}>
-                      <td style={styles.td}>{speaker.full_name}</td>
-                      <td style={styles.td}>{speaker.affiliation}</td>
-                      <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                      <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                      <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-// Dashboard View
-const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, onRejectSpeaker, onEditSpeaker, onEditConfirmed, getRankingColor, getStatusColor, formatDate }) => {
-  if (!userRole) {
-    return <div style={styles.emptyText}>Loading user data...</div>;
-  }
-
-  if (userRole.role === 'Organizer') {
-    const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
-    const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
-    
-    // Filter for future speakers only
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const acceptedSpeakers = speakers.filter(s => {
-      if (s.status !== 'Accepted') return false;
-      if (!s.assigned_date) return true;
-      const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
-      return speakerDate >= today;
-    });
-
-    return (
-      <div>
-        <h2 style={styles.sectionTitle}>Organizer Dashboard</h2>
-        
-        <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>Proposed Speakers Awaiting Approval ({proposedSpeakers.length})</h3>
-          {proposedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No speakers pending approval</p>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Email</th>
-                  <th style={styles.th}>Affiliation</th>
-                  <th style={styles.th}>Country</th>
-                  <th style={styles.th}>Expertise</th>
-                  <th style={styles.th}>Ranking</th>
-                  <th style={styles.th}>Host</th>
-                  <th style={styles.th}>Proposed By</th>
-                  <th style={styles.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {proposedSpeakers.map(speaker => (
-                  <tr key={speaker.id}>
-                    <td style={styles.td}>{speaker.full_name}</td>
-                    <td style={styles.td}>{speaker.email}</td>
-                    <td style={styles.td}>{speaker.affiliation}</td>
-                    <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                    <td style={styles.td}>{speaker.area_of_expertise}</td>
-                    <td style={styles.td}>
-                      <span style={{
-                        ...styles.badge,
-                        backgroundColor: getRankingColor(speaker.ranking)
-                      }}>
-                        {speaker.ranking}
-                      </span>
-                    </td>
-                    <td style={styles.td}>{speaker.host}</td>
-                    <td style={styles.td}>{speaker.proposed_by_name}</td>
-                    <td style={styles.td}>
-                      <button 
-                        onClick={() => onEditSpeaker(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                        Edit
-                      </button>
-                      <button 
-                        onClick={() => onAcceptSpeaker(speaker.id)}
-                        style={{...styles.actionBtn, ...styles.acceptBtn}}>
-                        Accept
-                      </button>
-                      <button 
-                        onClick={() => onRejectSpeaker(speaker.id)}
-                        style={{...styles.actionBtn, ...styles.declineBtn}}>
-                        Reject
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
-          {invitedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No pending invitations</p>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Email</th>
-                  <th style={styles.th}>Invited On</th>
-                  <th style={styles.th}>Deadline</th>
-                  <th style={styles.th}>Host</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invitedSpeakers.map(speaker => (
-                  <tr key={speaker.id}>
-                    <td style={styles.td}>{speaker.full_name}</td>
-                    <td style={styles.td}>{speaker.email}</td>
-                    <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
-                    <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
-                    <td style={styles.td}>{speaker.host}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>Confirmed Upcoming Speakers ({acceptedSpeakers.length})</h3>
-          <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
-            Showing only upcoming speakers. View all past speakers in the "Past Speakers" tab.
-          </p>
-          {acceptedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No confirmed upcoming speakers</p>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Talk Title</th>
-                  <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Host</th>
-                  <th style={styles.th}>Abstract</th>
-                  <th style={styles.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {acceptedSpeakers.map(speaker => (
-                  <tr key={speaker.id}>
-                    <td style={styles.td}>{speaker.full_name}</td>
-                    <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                    <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                    <td style={styles.td}>{speaker.host}</td>
-                    <td style={styles.td}>
-                      {speaker.talk_abstract ? (
-                        <span style={styles.abstractPreview} title={speaker.talk_abstract}>
-                          {speaker.talk_abstract.substring(0, 50)}...
-                        </span>
-                      ) : (
-                        <em style={{color: '#999'}}>No abstract</em>
-                      )}
-                    </td>
-                    <td style={styles.td}>
-                      <button 
-                        onClick={() => onEditConfirmed(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // Senior Fellow Dashboard
-  const mySpeakers = speakers.filter(s => s.proposed_by_id === userRole.id);
-  const allProposedSpeakers = speakers.filter(s => s.status === 'Proposed');
-  const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
-  
-  // Filter for future speakers only
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const acceptedSpeakers = speakers.filter(s => {
-    if (s.status !== 'Accepted') return false;
-    if (!s.assigned_date) return true;
-    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
-    return speakerDate >= today;
-  });
-
-  return (
-    <div>
-      <h2 style={styles.sectionTitle}>Senior Fellow Dashboard</h2>
-      
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>All Proposed Speakers ({allProposedSpeakers.length})</h3>
-        {allProposedSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>No speakers have been proposed yet</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Affiliation</th>
-                <th style={styles.th}>Country</th>
-                <th style={styles.th}>Expertise</th>
-                <th style={styles.th}>Ranking</th>
-                <th style={styles.th}>Host</th>
-                <th style={styles.th}>Proposed By</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allProposedSpeakers.map(speaker => (
-                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                  <td style={styles.td}>
-                    {speaker.full_name}
-                    {speaker.proposed_by_id === userRole.id && (
-                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                        (You)
-                      </span>
-                    )}
-                  </td>
-                  <td style={styles.td}>{speaker.affiliation}</td>
-                  <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                  <td style={styles.td}>{speaker.area_of_expertise}</td>
-                  <td style={styles.td}>
-                    <span style={{
-                      ...styles.badge,
-                      backgroundColor: getRankingColor(speaker.ranking)
-                    }}>
-                      {speaker.ranking}
-                    </span>
-                  </td>
-                  <td style={styles.td}>{speaker.host}</td>
-                  <td style={styles.td}>{speaker.proposed_by_name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
-        {invitedSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>No pending invitations</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Expertise</th>
-                <th style={styles.th}>Host</th>
-                <th style={styles.th}>Invited On</th>
-                <th style={styles.th}>Deadline</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invitedSpeakers.map(speaker => (
-                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                  <td style={styles.td}>
-                    {speaker.full_name}
-                    {speaker.proposed_by_id === userRole.id && (
-                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                        (Your proposal)
-                      </span>
-                    )}
-                  </td>
-                  <td style={styles.td}>{speaker.email}</td>
-                  <td style={styles.td}>{speaker.area_of_expertise}</td>
-                  <td style={styles.td}>{speaker.host}</td>
-                  <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
-                  <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>Confirmed Upcoming Speakers ({acceptedSpeakers.length})</h3>
-        <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
-          Showing only upcoming speakers. View all past speakers in the "Past Speakers" tab.
-        </p>
-        {acceptedSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>No confirmed upcoming speakers</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Talk Title</th>
-                <th style={styles.th}>Date</th>
-                <th style={styles.th}>Host</th>
-                <th style={styles.th}>Proposed By</th>
-              </tr>
-            </thead>
-            <tbody>
-              {acceptedSpeakers.map(speaker => (
-                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                  <td style={styles.td}>
-                    {speaker.full_name}
-                    {speaker.proposed_by_id === userRole.id && (
-                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                        (Your proposal)
-                      </span>
-                    )}
-                  </td>
-                  <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                  <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                  <td style={styles.td}>{speaker.host}</td>
-                  <td style={styles.td}>{speaker.proposed_by_name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>My Proposals Summary</h3>
-        <p style={{fontSize: '16px', color: '#555'}}>
-          You have proposed <strong>{mySpeakers.length}</strong> speaker(s):
-        </p>
-        <ul style={{fontSize: '15px', color: '#555', lineHeight: '1.8'}}>
-          <li>Proposed: <strong>{mySpeakers.filter(s => s.status === 'Proposed').length}</strong></li>
-          <li>Invited (awaiting response): <strong>{mySpeakers.filter(s => s.status === 'Invited').length}</strong></li>
-          <li>Accepted: <strong>{mySpeakers.filter(s => s.status === 'Accepted').length}</strong></li>
-          <li>Declined: <strong>{mySpeakers.filter(s => s.status === 'Declined').length}</strong></li>
-        </ul>
-      </div>
-    </div>
-  );
-};
-
-// Other View Components
-const DatesView = ({ dates, speakers, onAddDate, onDeleteDate, formatDate }) => {
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>Available Dates</h2>
-        <button onClick={onAddDate} style={styles.addBtn}>+ Add Date</button>
-      </div>
-      
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Date</th>
-            <th style={styles.th}>Talk Title</th>
-            <th style={styles.th}>Host</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>Locked By</th>
-            <th style={styles.th}>Notes</th>
-            <th style={styles.th}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {dates.map(date => {
-            const lockedSpeaker = speakers.find(s => s.id === date.locked_by_id);
-            return (
-              <tr key={date.id}>
-                <td style={styles.td}>{formatDate(date.date)}</td>
-                <td style={styles.td}>{date.talk_title || '-'}</td>
-                <td style={styles.td}>{date.host || '-'}</td>
-                <td style={styles.td}>
-                  <span style={{
-                    ...styles.badge,
-                    backgroundColor: date.available ? '#00cc00' : '#ff4444'
-                  }}>
-                    {date.available ? 'Available' : 'Locked'}
-                  </span>
-                </td>
-                <td style={styles.td}>{lockedSpeaker?.full_name || '-'}</td>
-                <td style={styles.td}>{date.notes || '-'}</td>
-                <td style={styles.td}>
-                  {date.available && (
-                    <button 
-                      onClick={() => onDeleteDate(date.id)}
-                      style={{...styles.actionBtn, ...styles.declineBtn}}>
-                      Delete
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-};
-
-const AllSpeakersView = ({ speakers, getRankingColor, getStatusColor, formatDate }) => {
-  return (
-    <div>
-      <h2 style={styles.sectionTitle}>All Speakers</h2>
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Name</th>
-            <th style={styles.th}>Email</th>
-            <th style={styles.th}>Affiliation</th>
-            <th style={styles.th}>Country</th>
-            <th style={styles.th}>Expertise</th>
-            <th style={styles.th}>Ranking</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>Host</th>
-            <th style={styles.th}>Proposed By</th>
-            <th style={styles.th}>Date</th>
-          </tr>
-        </thead>
-        <tbody>
-          {speakers.map(speaker => (
-            <tr key={speaker.id}>
-              <td style={styles.td}>{speaker.full_name}</td>
-              <td style={styles.td}>{speaker.email}</td>
-              <td style={styles.td}>{speaker.affiliation}</td>
-              <td style={styles.td}>{speaker.country || 'N/A'}</td>
-              <td style={styles.td}>{speaker.area_of_expertise}</td>
-              <td style={styles.td}>
-                <span style={{
-                  ...styles.badge,
-                  backgroundColor: getRankingColor(speaker.ranking)
-                }}>
-                  {speaker.ranking}
-                </span>
-              </td>
-              <td style={styles.td}>
-                <span style={{
-                  ...styles.badge,
-                  backgroundColor: getStatusColor(speaker.status)
-                }}>
-                  {speaker.status}
-                </span>
-              </td>
-              <td style={styles.td}>{speaker.host}</td>
-              <td style={styles.td}>{speaker.proposed_by_name}</td>
-              <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-};
-
-const InvitationsView = ({ invitations, onCreateInvitation, formatDate }) => {
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>User Invitations</h2>
-        <button onClick={onCreateInvitation} style={styles.addBtn}>+ Create Invitation</button>
-      </div>
-      
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Email</th>
-            <th style={styles.th}>Name</th>
-            <th style={styles.th}>Role</th>
-            <th style={styles.th}>Invited By</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>Expires</th>
-          </tr>
-        </thead>
-        <tbody>
-          {invitations.map(inv => (
-            <tr key={inv.id}>
-              <td style={styles.td}>{inv.email}</td>
-              <td style={styles.td}>{inv.full_name}</td>
-              <td style={styles.td}>{inv.role}</td>
-              <td style={styles.td}>{inv.invited_by_name}</td>
-              <td style={styles.td}>
-                <span style={{
-                  ...styles.badge,
-                  backgroundColor: inv.used ? '#999' : '#00cc00'
-                }}>
-                  {inv.used ? 'Used' : 'Active'}
-                </span>
-              </td>
-              <td style={styles.td}>{formatDate(inv.expires_at)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-};
-
-const ManageUsersView = ({ users, currentUserId, onEditUser, onDeleteUser, onPasswordReset, formatDate }) => {
-  return (
-    <div>
-      <h2 style={styles.sectionTitle}>Manage Users</h2>
-      <div style={styles.section}>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Name</th>
-              <th style={styles.th}>Email</th>
-              <th style={styles.th}>Role</th>
-              <th style={styles.th}>Created</th>
-              <th style={styles.th}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map(user => (
-              <tr key={user.id}>
-                <td style={styles.td}>
-                  {user.full_name}
-                  {user.id === currentUserId && <span style={{color: '#3498db', marginLeft: '8px'}}>(You)</span>}
-                </td>
-                <td style={styles.td}>{user.email}</td>
-                <td style={styles.td}>
-                  <span style={{
-                    ...styles.badge,
-                    backgroundColor: user.role === 'Organizer' ? '#3498db' : '#9b59b6'
-                  }}>
-                    {user.role}
-                  </span>
-                </td>
-                <td style={styles.td}>{formatDate(user.createdAt)}</td>
-                <td style={styles.td}>
-                  <button 
-                    onClick={() => onEditUser(user)}
-                    style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                    Edit
-                  </button>
-                  <button 
-                    onClick={() => onPasswordReset(user.email)}
-                    style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                    Reset Password
-                  </button>
-                  {user.id !== currentUserId && (
-                    <button 
-                      onClick={() => onDeleteUser(user.id, user.email)}
-                      style={{...styles.actionBtn, ...styles.declineBtn}}>
-                      Remove
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpeaker, getRankingColor, getStatusColor, formatDate }) => {
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>Propose Speaker</h2>
-        <button onClick={onAddSpeaker} style={styles.addBtn}>+ Propose New Speaker</button>
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>My Proposed Speakers</h3>
-        {speakers.length === 0 ? (
-          <p style={styles.emptyText}>You haven't proposed any speakers yet</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Affiliation</th>
-                <th style={styles.th}>Country</th>
-                <th style={styles.th}>Expertise</th>
-                <th style={styles.th}>Ranking</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>Date</th>
-                <th style={styles.th}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {speakers.map(speaker => (
-                <tr key={speaker.id}>
-                  <td style={styles.td}>{speaker.full_name}</td>
-                  <td style={styles.td}>{speaker.email}</td>
-                  <td style={styles.td}>{speaker.affiliation}</td>
-                  <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                  <td style={styles.td}>{speaker.area_of_expertise}</td>
-                  <td style={styles.td}>
-                    <span style={{
-                      ...styles.badge,
-                      backgroundColor: getRankingColor(speaker.ranking)
-                    }}>
-                      {speaker.ranking}
-                    </span>
-                  </td>
-                  <td style={styles.td}>
-                    <span style={{
-                      ...styles.badge,
-                      backgroundColor: getStatusColor(speaker.status)
-                    }}>
-                      {speaker.status}
-                    </span>
-                  </td>
-                  <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                  <td style={styles.td}>
-                    {speaker.status === 'Proposed' && (
-                      <>
-                        <button 
-                          onClick={() => onEditSpeaker(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                          Edit
-                        </button>
-                        <button 
-                          onClick={() => onDeleteSpeaker(speaker.id)}
-                          style={{...styles.actionBtn, ...styles.declineBtn}}>
-                          Delete
-                        </button>
-                      </>
-                    )}
-                    {speaker.status !== 'Proposed' && (
-                      <em style={{color: '#999', fontSize: '13px'}}>
-                        {speaker.status === 'Invited' && 'Awaiting response'}
-                        {speaker.status === 'Accepted' && 'Confirmed'}
-                        {speaker.status === 'Declined' && 'Declined'}
-                      </em>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
     </div>
   );
 };
@@ -1882,6 +1072,614 @@ const SpeakerAccessView = ({ speaker, availableDates, onAccept, onDecline, forma
   );
 };
 
+  // Dashboard View
+  const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, onRejectSpeaker, onEditSpeaker, onEditConfirmed, getRankingColor, getStatusColor, formatDate }) => {
+  // Safety check
+  if (!userRole) {
+    return <div style={styles.emptyText}>Loading user data...</div>;
+  }
+
+  if (userRole.role === 'Organizer') {
+    const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
+    const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
+    const acceptedSpeakers = speakers.filter(s => s.status === 'Accepted');
+
+    return (
+      <div>
+        <h2 style={styles.sectionTitle}>Organizer Dashboard</h2>
+        
+        {/* Proposed Speakers */}
+        <div style={styles.section}>
+          <h3 style={styles.subsectionTitle}>Proposed Speakers Awaiting Approval ({proposedSpeakers.length})</h3>
+          {proposedSpeakers.length === 0 ? (
+            <p style={styles.emptyText}>No speakers pending approval</p>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Email</th>
+                  <th style={styles.th}>Affiliation</th>
+                  <th style={styles.th}>Expertise</th>
+                  <th style={styles.th}>Ranking</th>
+                  <th style={styles.th}>Host</th>
+                  <th style={styles.th}>Proposed By</th>
+                  <th style={styles.th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposedSpeakers.map(speaker => (
+                  <tr key={speaker.id}>
+                    <td style={styles.td}>{speaker.full_name}</td>
+                    <td style={styles.td}>{speaker.email}</td>
+                    <td style={styles.td}>{speaker.affiliation}</td>
+                    <td style={styles.td}>{speaker.area_of_expertise}</td>
+                    <td style={styles.td}>
+                      <span style={{
+                        ...styles.badge,
+                        backgroundColor: getRankingColor(speaker.ranking)
+                      }}>
+                        {speaker.ranking}
+                      </span>
+                    </td>
+                    <td style={styles.td}>{speaker.host}</td>
+                    <td style={styles.td}>{speaker.proposed_by_name}</td>
+                    <td style={styles.td}>
+                      <button 
+                        onClick={() => onEditSpeaker(speaker)}
+                        style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
+                        Edit
+                      </button>
+                      <button 
+                        onClick={() => onAcceptSpeaker(speaker.id)}
+                        style={{...styles.actionBtn, ...styles.acceptBtn}}>
+                        Accept
+                      </button>
+                      <button 
+                        onClick={() => onRejectSpeaker(speaker.id)}
+                        style={{...styles.actionBtn, ...styles.declineBtn}}>
+                        Reject
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Invited Speakers */}
+        <div style={styles.section}>
+          <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
+          {invitedSpeakers.length === 0 ? (
+            <p style={styles.emptyText}>No pending invitations</p>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Email</th>
+                  <th style={styles.th}>Invited On</th>
+                  <th style={styles.th}>Deadline</th>
+                  <th style={styles.th}>Host</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invitedSpeakers.map(speaker => (
+                  <tr key={speaker.id}>
+                    <td style={styles.td}>{speaker.full_name}</td>
+                    <td style={styles.td}>{speaker.email}</td>
+                    <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
+                    <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
+                    <td style={styles.td}>{speaker.host}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Accepted Speakers */}
+        <div style={styles.section}>
+          <h3 style={styles.subsectionTitle}>Confirmed Speakers ({acceptedSpeakers.length})</h3>
+          {acceptedSpeakers.length === 0 ? (
+            <p style={styles.emptyText}>No confirmed speakers yet</p>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Talk Title</th>
+                  <th style={styles.th}>Date</th>
+                  <th style={styles.th}>Host</th>
+                  <th style={styles.th}>Abstract</th>
+                  <th style={styles.th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {acceptedSpeakers.map(speaker => (
+                  <tr key={speaker.id}>
+                    <td style={styles.td}>{speaker.full_name}</td>
+                    <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
+                    <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+                    <td style={styles.td}>{speaker.host}</td>
+                    <td style={styles.td}>
+                      {speaker.talk_abstract ? (
+                        <span style={styles.abstractPreview} title={speaker.talk_abstract}>
+                          {speaker.talk_abstract.substring(0, 50)}...
+                        </span>
+                      ) : (
+                        <em style={{color: '#999'}}>No abstract</em>
+                      )}
+                    </td>
+                    <td style={styles.td}>
+                      <button 
+                        onClick={() => onEditConfirmed(speaker)}
+                        style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Senior Fellow Dashboard
+  const mySpeakers = speakers.filter(s => s.proposed_by_id === userRole.id);
+  const allProposedSpeakers = speakers.filter(s => s.status === 'Proposed');
+  const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
+  const acceptedSpeakers = speakers.filter(s => s.status === 'Accepted');
+
+  return (
+    <div>
+      <h2 style={styles.sectionTitle}>Senior Fellow Dashboard</h2>
+      
+      {/* All Proposed Speakers */}
+      <div style={styles.section}>
+        <h3 style={styles.subsectionTitle}>All Proposed Speakers ({allProposedSpeakers.length})</h3>
+        {allProposedSpeakers.length === 0 ? (
+          <p style={styles.emptyText}>No speakers have been proposed yet</p>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Name</th>
+                <th style={styles.th}>Affiliation</th>
+                <th style={styles.th}>Expertise</th>
+                <th style={styles.th}>Ranking</th>
+                <th style={styles.th}>Host</th>
+                <th style={styles.th}>Proposed By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allProposedSpeakers.map(speaker => (
+                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
+                  <td style={styles.td}>
+                    {speaker.full_name}
+                    {speaker.proposed_by_id === userRole.id && (
+                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
+                        (You)
+                      </span>
+                    )}
+                  </td>
+                  <td style={styles.td}>{speaker.affiliation}</td>
+                  <td style={styles.td}>{speaker.area_of_expertise}</td>
+                  <td style={styles.td}>
+                    <span style={{
+                      ...styles.badge,
+                      backgroundColor: getRankingColor(speaker.ranking)
+                    }}>
+                      {speaker.ranking}
+                    </span>
+                  </td>
+                  <td style={styles.td}>{speaker.host}</td>
+                  <td style={styles.td}>{speaker.proposed_by_name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Invited Speakers */}
+      <div style={styles.section}>
+        <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
+        {invitedSpeakers.length === 0 ? (
+          <p style={styles.emptyText}>No pending invitations</p>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Name</th>
+                <th style={styles.th}>Email</th>
+                <th style={styles.th}>Expertise</th>
+                <th style={styles.th}>Host</th>
+                <th style={styles.th}>Invited On</th>
+                <th style={styles.th}>Deadline</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invitedSpeakers.map(speaker => (
+                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
+                  <td style={styles.td}>
+                    {speaker.full_name}
+                    {speaker.proposed_by_id === userRole.id && (
+                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
+                        (Your proposal)
+                      </span>
+                    )}
+                  </td>
+                  <td style={styles.td}>{speaker.email}</td>
+                  <td style={styles.td}>{speaker.area_of_expertise}</td>
+                  <td style={styles.td}>{speaker.host}</td>
+                  <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
+                  <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Accepted Speakers */}
+      <div style={styles.section}>
+        <h3 style={styles.subsectionTitle}>Confirmed Speakers ({acceptedSpeakers.length})</h3>
+        {acceptedSpeakers.length === 0 ? (
+          <p style={styles.emptyText}>No confirmed speakers yet</p>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Name</th>
+                <th style={styles.th}>Talk Title</th>
+                <th style={styles.th}>Date</th>
+                <th style={styles.th}>Host</th>
+                <th style={styles.th}>Proposed By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {acceptedSpeakers.map(speaker => (
+                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
+                  <td style={styles.td}>
+                    {speaker.full_name}
+                    {speaker.proposed_by_id === userRole.id && (
+                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
+                        (Your proposal)
+                      </span>
+                    )}
+                  </td>
+                  <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
+                  <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+                  <td style={styles.td}>{speaker.host}</td>
+                  <td style={styles.td}>{speaker.proposed_by_name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* My Proposed Speakers Summary */}
+      <div style={styles.section}>
+        <h3 style={styles.subsectionTitle}>My Proposals Summary</h3>
+        <p style={{fontSize: '16px', color: '#555'}}>
+          You have proposed <strong>{mySpeakers.length}</strong> speaker(s):
+        </p>
+        <ul style={{fontSize: '15px', color: '#555', lineHeight: '1.8'}}>
+          <li>Proposed: <strong>{mySpeakers.filter(s => s.status === 'Proposed').length}</strong></li>
+          <li>Invited (awaiting response): <strong>{mySpeakers.filter(s => s.status === 'Invited').length}</strong></li>
+          <li>Accepted: <strong>{mySpeakers.filter(s => s.status === 'Accepted').length}</strong></li>
+          <li>Declined: <strong>{mySpeakers.filter(s => s.status === 'Declined').length}</strong></li>
+        </ul>
+      </div>
+    </div>
+  );
+};
+
+// Dates View
+const DatesView = ({ dates, speakers, onAddDate, onDeleteDate, formatDate }) => {
+  return (
+    <div>
+      <div style={styles.sectionHeader}>
+        <h2 style={styles.sectionTitle}>Available Dates</h2>
+        <button onClick={onAddDate} style={styles.addBtn}>+ Add Date</button>
+      </div>
+      
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Date</th>
+            <th style={styles.th}>Talk Title</th>
+            <th style={styles.th}>Host</th>
+            <th style={styles.th}>Status</th>
+            <th style={styles.th}>Locked By</th>
+            <th style={styles.th}>Notes</th>
+            <th style={styles.th}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dates.map(date => {
+            const lockedSpeaker = speakers.find(s => s.id === date.locked_by_id);
+            return (
+              <tr key={date.id}>
+                <td style={styles.td}>{formatDate(date.date)}</td>
+                <td style={styles.td}>{date.talk_title || '-'}</td>
+                <td style={styles.td}>{date.host}</td>
+                <td style={styles.td}>
+                  <span style={{
+                    ...styles.badge,
+                    backgroundColor: date.available ? '#00cc00' : '#ff4444'
+                  }}>
+                    {date.available ? 'Available' : 'Locked'}
+                  </span>
+                </td>
+                <td style={styles.td}>{lockedSpeaker?.full_name || '-'}</td>
+                <td style={styles.td}>{date.notes || '-'}</td>
+                <td style={styles.td}>
+                  {date.available && (
+                    <button 
+                      onClick={() => onDeleteDate(date.id)}
+                      style={{...styles.actionBtn, ...styles.declineBtn}}>
+                      Delete
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// All Speakers View
+const AllSpeakersView = ({ speakers, getRankingColor, getStatusColor, formatDate }) => {
+  return (
+    <div>
+      <h2 style={styles.sectionTitle}>All Speakers</h2>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Name</th>
+            <th style={styles.th}>Email</th>
+            <th style={styles.th}>Affiliation</th>
+            <th style={styles.th}>Expertise</th>
+            <th style={styles.th}>Ranking</th>
+            <th style={styles.th}>Status</th>
+            <th style={styles.th}>Host</th>
+            <th style={styles.th}>Proposed By</th>
+            <th style={styles.th}>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {speakers.map(speaker => (
+            <tr key={speaker.id}>
+              <td style={styles.td}>{speaker.full_name}</td>
+              <td style={styles.td}>{speaker.email}</td>
+              <td style={styles.td}>{speaker.affiliation}</td>
+              <td style={styles.td}>{speaker.area_of_expertise}</td>
+              <td style={styles.td}>
+                <span style={{
+                  ...styles.badge,
+                  backgroundColor: getRankingColor(speaker.ranking)
+                }}>
+                  {speaker.ranking}
+                </span>
+              </td>
+              <td style={styles.td}>
+                <span style={{
+                  ...styles.badge,
+                  backgroundColor: getStatusColor(speaker.status)
+                }}>
+                  {speaker.status}
+                </span>
+              </td>
+              <td style={styles.td}>{speaker.host}</td>
+              <td style={styles.td}>{speaker.proposed_by_name}</td>
+              <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// Invitations View
+const InvitationsView = ({ invitations, onCreateInvitation, formatDate }) => {
+  return (
+    <div>
+      <div style={styles.sectionHeader}>
+        <h2 style={styles.sectionTitle}>User Invitations</h2>
+        <button onClick={onCreateInvitation} style={styles.addBtn}>+ Create Invitation</button>
+      </div>
+      
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Email</th>
+            <th style={styles.th}>Name</th>
+            <th style={styles.th}>Role</th>
+            <th style={styles.th}>Invited By</th>
+            <th style={styles.th}>Status</th>
+            <th style={styles.th}>Expires</th>
+          </tr>
+        </thead>
+        <tbody>
+          {invitations.map(inv => (
+            <tr key={inv.id}>
+              <td style={styles.td}>{inv.email}</td>
+              <td style={styles.td}>{inv.full_name}</td>
+              <td style={styles.td}>{inv.role}</td>
+              <td style={styles.td}>{inv.invited_by_name}</td>
+              <td style={styles.td}>
+                <span style={{
+                  ...styles.badge,
+                  backgroundColor: inv.used ? '#999' : '#00cc00'
+                }}>
+                  {inv.used ? 'Used' : 'Active'}
+                </span>
+              </td>
+              <td style={styles.td}>{formatDate(inv.expires_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// Manage Users View
+const ManageUsersView = ({ users, currentUserId, onEditUser, onDeleteUser, onPasswordReset, formatDate }) => {
+  return (
+    <div>
+      <h2 style={styles.sectionTitle}>Manage Users</h2>
+      <div style={styles.section}>
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Name</th>
+              <th style={styles.th}>Email</th>
+              <th style={styles.th}>Role</th>
+              <th style={styles.th}>Created</th>
+              <th style={styles.th}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(user => (
+              <tr key={user.id}>
+                <td style={styles.td}>
+                  {user.full_name}
+                  {user.id === currentUserId && <span style={{color: '#3498db', marginLeft: '8px'}}>(You)</span>}
+                </td>
+                <td style={styles.td}>{user.email}</td>
+                <td style={styles.td}>
+                  <span style={{
+                    ...styles.badge,
+                    backgroundColor: user.role === 'Organizer' ? '#3498db' : '#9b59b6'
+                  }}>
+                    {user.role}
+                  </span>
+                </td>
+                <td style={styles.td}>{formatDate(user.createdAt)}</td>
+                <td style={styles.td}>
+                  <button 
+                    onClick={() => onEditUser(user)}
+                    style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
+                    Edit
+                  </button>
+                  <button 
+                    onClick={() => onPasswordReset(user.email)}
+                    style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
+                    Reset Password
+                  </button>
+                  {user.id !== currentUserId && (
+                    <button 
+                      onClick={() => onDeleteUser(user.id, user.email)}
+                      style={{...styles.actionBtn, ...styles.declineBtn}}>
+                      Remove
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// Propose Speaker View
+const ProposeSpeakerView = ({ onAddSpeaker, speakers, getRankingColor, getStatusColor, formatDate, onEditSpeaker, onDeleteSpeaker }) => {
+  return (
+    <div>
+      <div style={styles.sectionHeader}>
+        <h2 style={styles.sectionTitle}>Propose Speaker</h2>
+        <button onClick={onAddSpeaker} style={styles.addBtn}>+ Propose New Speaker</button>
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.subsectionTitle}>My Proposed Speakers</h3>
+        {speakers.length === 0 ? (
+          <p style={styles.emptyText}>You haven't proposed any speakers yet</p>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Name</th>
+                <th style={styles.th}>Email</th>
+                <th style={styles.th}>Affiliation</th>
+                <th style={styles.th}>Expertise</th>
+                <th style={styles.th}>Ranking</th>
+                <th style={styles.th}>Status</th>
+                <th style={styles.th}>Date</th>
+                <th style={styles.th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {speakers.map(speaker => (
+                <tr key={speaker.id}>
+                  <td style={styles.td}>{speaker.full_name}</td>
+                  <td style={styles.td}>{speaker.email}</td>
+                  <td style={styles.td}>{speaker.affiliation}</td>
+                  <td style={styles.td}>{speaker.area_of_expertise}</td>
+                  <td style={styles.td}>
+                    <span style={{
+                      ...styles.badge,
+                      backgroundColor: getRankingColor(speaker.ranking)
+                    }}>
+                      {speaker.ranking}
+                    </span>
+                  </td>
+                  <td style={styles.td}>
+                    <span style={{
+                      ...styles.badge,
+                      backgroundColor: getStatusColor(speaker.status)
+                    }}>
+                      {speaker.status}
+                    </span>
+                  </td>
+                  <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+                  <td style={styles.td}>
+                    {speaker.status === 'Proposed' && (
+                      <>
+                        <button 
+                          onClick={() => onEditSpeaker(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
+                          Edit
+                        </button>
+                        <button 
+                          onClick={() => onDeleteSpeaker(speaker.id)}
+                          style={{...styles.actionBtn, ...styles.declineBtn}}>
+                          Delete
+                        </button>
+                      </>
+                    )}
+                    {speaker.status !== 'Proposed' && (
+                      <em style={{color: '#999', fontSize: '13px'}}>
+                        {speaker.status === 'Invited' && 'Awaiting response'}
+                        {speaker.status === 'Accepted' && 'Confirmed'}
+                        {speaker.status === 'Declined' && 'Declined'}
+                      </em>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Add Date Form
 const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
   const [formData, setFormData] = useState({
@@ -1895,6 +1693,7 @@ const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
     onSubmit(formData);
   };
 
+  // Sort existing dates by date (exclude deleted)
   const activeDates = existingDates.filter(d => d.locked_by_id !== 'DELETED');
   const sortedDates = [...activeDates].sort((a, b) => {
     const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
@@ -1907,6 +1706,7 @@ const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
       <div style={styles.modalContent}>
         <h3 style={styles.modalTitle}>Add Available Date</h3>
         
+        {/* Show existing dates */}
         {activeDates.length > 0 && (
           <div style={styles.existingDatesContainer}>
             <h4 style={styles.existingDatesTitle}>Existing Dates:</h4>
@@ -1928,7 +1728,7 @@ const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
                   </div>
                   <div style={styles.existingDateDetails}>
                     {date.talk_title && <span>"{date.talk_title}" - </span>}
-                    {date.host && `Host: ${date.host}`}
+                    Host: {date.host}
                     {date.notes && ` (${date.notes})`}
                   </div>
                 </div>
@@ -1938,7 +1738,7 @@ const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
         )}
 
         <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Date: *</label>
+          <label style={styles.label}>Date:</label>
           <input
             type="date"
             value={formData.date}
@@ -1947,13 +1747,14 @@ const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
             required
           />
 
-          <label style={styles.label}>Host (optional):</label>
+          <label style={styles.label}>Host:</label>
           <input
             type="text"
             value={formData.host}
             onChange={(e) => setFormData({...formData, host: e.target.value})}
             style={styles.input}
-            placeholder="Host name (can be set later)"
+            placeholder="Host name"
+            required
           />
 
           <label style={styles.label}>Notes:</label>
@@ -1976,12 +1777,11 @@ const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
 };
 
 // Add Speaker Form
-const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countries }) => {
+const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser }) => {
   const [formData, setFormData] = useState({
     full_name: '',
     email: '',
     affiliation: '',
-    country: '',
     area_of_expertise: '',
     ranking: 'Medium Priority',
     host: currentUser?.full_name || ''
@@ -1997,7 +1797,7 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
       <div style={styles.modalContent}>
         <h3 style={styles.modalTitle}>Propose Speaker</h3>
         <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Full Name: *</label>
+          <label style={styles.label}>Full Name:</label>
           <input
             type="text"
             value={formData.full_name}
@@ -2006,7 +1806,7 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
             required
           />
 
-          <label style={styles.label}>Email: *</label>
+          <label style={styles.label}>Email:</label>
           <input
             type="email"
             value={formData.email}
@@ -2015,33 +1815,16 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
             required
           />
 
-          <label style={styles.label}>Affiliation: *</label>
+          <label style={styles.label}>Affiliation:</label>
           <input
             type="text"
             value={formData.affiliation}
             onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
             style={styles.input}
-            placeholder="Institution, University, etc."
             required
           />
 
-          <label style={styles.label}>Country of Affiliation: *</label>
-          <select
-            value={formData.country}
-            onChange={(e) => setFormData({...formData, country: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Country --</option>
-            {countries.map((country, idx) => {
-              if (country.startsWith('---')) {
-                return <option key={idx} disabled style={{fontWeight: 'bold', backgroundColor: '#f0f0f0'}}>{country}</option>;
-              }
-              return <option key={idx} value={country}>{country}</option>;
-            })}
-          </select>
-
-          <label style={styles.label}>Area of Expertise: *</label>
+          <label style={styles.label}>Area of Expertise:</label>
           <input
             type="text"
             value={formData.area_of_expertise}
@@ -2061,7 +1844,7 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
             <option value="Low Priority">Low Priority</option>
           </select>
 
-          <label style={styles.label}>Host: *</label>
+          <label style={styles.label}>Host:</label>
           <select
             value={formData.host}
             onChange={(e) => setFormData({...formData, host: e.target.value})}
@@ -2086,13 +1869,12 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
   );
 };
 
-// Edit Speaker Form
-const EditSpeakerForm = ({ speaker, onSubmit, onCancel, seniorFellows, countries }) => {
+// Edit Speaker Form (for Proposed speakers)
+const EditSpeakerForm = ({ speaker, onSubmit, onCancel, seniorFellows }) => {
   const [formData, setFormData] = useState({
     full_name: speaker.full_name,
     email: speaker.email,
     affiliation: speaker.affiliation,
-    country: speaker.country || '',
     area_of_expertise: speaker.area_of_expertise,
     ranking: speaker.ranking,
     host: speaker.host
@@ -2134,22 +1916,6 @@ const EditSpeakerForm = ({ speaker, onSubmit, onCancel, seniorFellows, countries
             style={styles.input}
             required
           />
-
-          <label style={styles.label}>Country of Affiliation:</label>
-          <select
-            value={formData.country}
-            onChange={(e) => setFormData({...formData, country: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Country --</option>
-            {countries.map((country, idx) => {
-              if (country.startsWith('---')) {
-                return <option key={idx} disabled style={{fontWeight: 'bold', backgroundColor: '#f0f0f0'}}>{country}</option>;
-              }
-              return <option key={idx} value={country}>{country}</option>;
-            })}
-          </select>
 
           <label style={styles.label}>Area of Expertise:</label>
           <input
@@ -2198,6 +1964,7 @@ const EditSpeakerForm = ({ speaker, onSubmit, onCancel, seniorFellows, countries
 
 // Edit Confirmed Speaker Form
 const EditConfirmedSpeakerForm = ({ speaker, availableDates, onSubmit, onCancel, formatDate }) => {
+  // Find current locked date
   const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
   
   const [formData, setFormData] = useState({
@@ -2217,6 +1984,7 @@ const EditConfirmedSpeakerForm = ({ speaker, availableDates, onSubmit, onCancel,
     onSubmit(formData);
   };
 
+  // Available dates + current locked date (excluding deleted)
   const selectableDates = availableDates.filter(d => 
     (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED'
   );
@@ -2488,59 +2256,6 @@ const styles = {
     borderRadius: '8px',
     marginBottom: '25px',
     boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-  },
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-    gap: '20px',
-    marginBottom: '30px',
-  },
-  statCard: {
-    backgroundColor: 'white',
-    padding: '25px',
-    borderRadius: '12px',
-    textAlign: 'center',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
-    border: '2px solid #00BCD4',
-  },
-  statNumber: {
-    fontSize: '42px',
-    fontWeight: '700',
-    color: '#00BCD4',
-  },
-  statLabel: {
-    fontSize: '16px',
-    color: '#666',
-    marginTop: '8px',
-  },
-  chartsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
-    gap: '25px',
-    marginBottom: '30px',
-  },
-  chartBox: {
-    backgroundColor: 'white',
-    padding: '20px',
-    borderRadius: '12px',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
-  },
-  chartTitle: {
-    fontSize: '18px',
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginBottom: '15px',
-    textAlign: 'center',
-  },
-  yearSection: {
-    marginBottom: '30px',
-  },
-  yearTitle: {
-    fontSize: '22px',
-    color: '#00BCD4',
-    marginBottom: '15px',
-    paddingBottom: '10px',
-    borderBottom: '2px solid #00BCD4',
   },
   table: {
     width: '100%',
