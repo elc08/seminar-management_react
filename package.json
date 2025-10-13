@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "private": true,
     "dependencies": {
-        "country-list": "^2.2.0",
+        "country-list": "^2.4.1",
         "firebase": "^10.7.1",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
