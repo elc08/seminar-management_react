@@ -3268,6 +3268,83 @@ const StatisticsView = ({ speakers, formatDate, onAddPastSpeaker, isOrganizer })
     </div>
   );
 };
+
+// Notification Panel Component
+const NotificationPanel = ({ responses, currentUser, formatDate }) => {
+  const [dismissed, setDismissed] = useState(new Set());
+
+  const handleDismiss = (speakerId) => {
+    setDismissed(prev => new Set([...prev, speakerId]));
+  };
+
+  const visibleResponses = responses.filter(r => !dismissed.has(r.id));
+
+  if (visibleResponses.length === 0) return null;
+
+  return (
+    <div style={styles.notificationPanel}>
+      <h3 style={styles.notificationTitle}>📬 Recent Speaker Responses</h3>
+      {visibleResponses.map(speaker => {
+        const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
+        const isRelevantToUser = 
+          currentUser.role === 'Organizer' || 
+          speaker.host === currentUser.full_name ||
+          speaker.proposed_by_id === currentUser.id;
+        
+        return (
+          <div 
+            key={speaker.id} 
+            style={{
+              ...styles.notificationItem,
+              backgroundColor: isRelevantToUser ? '#e8f4fd' : '#f8f9fa',
+              borderLeft: isRelevantToUser ? '4px solid #3498db' : '4px solid #95a5a6'
+            }}
+          >
+            <div style={styles.notificationContent}>
+              <div style={styles.notificationHeader}>
+                <span style={{fontSize: '20px', marginRight: '8px'}}>
+                  {responseAction.action === 'accepted' ? '✅' : '❌'}
+                </span>
+                <strong>{speaker.full_name}</strong>
+                <span style={{marginLeft: '8px'}}>
+                  {responseAction.action === 'accepted' ? 'accepted' : 'declined'}
+                </span>
+                {isRelevantToUser && (
+                  <span style={styles.notificationBadge}>
+                    {speaker.host === currentUser.full_name ? 'You are host' : 
+                     speaker.proposed_by_id === currentUser.id ? 'Your proposal' : 
+                     'Organizer'}
+                  </span>
+                )}
+              </div>
+              <div style={styles.notificationDetails}>
+                <span style={{fontSize: '13px', color: '#666'}}>
+                  {new Date(responseAction.timestamp).toLocaleString()}
+                </span>
+                {responseAction.action === 'accepted' && speaker.assigned_date && (
+                  <span style={{marginLeft: '15px', fontSize: '13px', color: '#555'}}>
+                    📅 {formatDate(speaker.assigned_date)}
+                  </span>
+                )}
+                <span style={{marginLeft: '15px', fontSize: '13px', color: '#555'}}>
+                  🎤 Host: {speaker.host}
+                </span>
+              </div>
+            </div>
+            <button 
+              onClick={() => handleDismiss(speaker.id)}
+              style={styles.notificationDismiss}
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // Dashboard View
 const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, onRejectSpeaker, onResendInvitation, onEditSpeaker, onEditConfirmed, onViewActions, onViewAgenda, onGeneratePoster, onDeleteInvited, getRankingColor, getStatusColor, formatDate }) => {
   if (!userRole) {
@@ -3280,6 +3357,28 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
     const deadline = speaker.response_deadline.toDate ? speaker.response_deadline.toDate() : new Date(speaker.response_deadline);
     return deadline < new Date();
   };
+
+  // Get recent speaker responses (last 7 days)
+  const getRecentResponses = () => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    return speakers.filter(speaker => {
+      if (!speaker.actions || speaker.actions.length === 0) return false;
+      
+      const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
+      if (!responseAction) return false;
+      
+      const responseDate = new Date(responseAction.timestamp);
+      return responseDate >= sevenDaysAgo;
+    }).sort((a, b) => {
+      const aAction = a.actions.find(act => act.type === 'speaker_responded');
+      const bAction = b.actions.find(act => act.type === 'speaker_responded');
+      return new Date(bAction.timestamp) - new Date(aAction.timestamp);
+    });
+  };
+
+  const recentResponses = getRecentResponses();
 
   if (userRole.role === 'Organizer') {
     const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
@@ -3295,19 +3394,239 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
     });
 
     return (
-      <div>
-        <h2 style={styles.sectionTitle}>Organizer Dashboard</h2>
+      <div style={styles.dashboardContainer}>
+        {recentResponses.length > 0 && (
+          <NotificationPanel 
+            responses={recentResponses} 
+            currentUser={userRole}
+            formatDate={formatDate}
+          />
+        )}
+        <div style={styles.dashboardMain}>
+          <h2 style={styles.sectionTitle}>Organizer Dashboard</h2>
+          
+          <div style={styles.section}>
+            <h3 style={styles.subsectionTitle}>Proposed Speakers Awaiting Approval ({proposedSpeakers.length})</h3>
+            {proposedSpeakers.length === 0 ? (
+              <p style={styles.emptyText}>No speakers pending approval</p>
+            ) : (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Name</th>
+                    <th style={styles.th}>Email</th>
+                    <th style={styles.th}>Affiliation</th>
+                    <th style={styles.th}>Country</th>
+                    <th style={styles.th}>Expertise</th>
+                    <th style={styles.th}>Ranking</th>
+                    <th style={styles.th}>Notes</th>
+                    <th style={styles.th}>Host</th>
+                    <th style={styles.th}>Proposed By</th>
+                    <th style={styles.th}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proposedSpeakers.map(speaker => (
+                    <tr key={speaker.id}>
+                      <td style={styles.td}>{speaker.full_name}</td>
+                      <td style={styles.td}>{speaker.email}</td>
+                      <td style={styles.td}>{speaker.affiliation}</td>
+                      <td style={styles.td}>{speaker.country || 'N/A'}</td>
+                      <td style={styles.td}>{speaker.area_of_expertise}</td>
+                      <td style={styles.td}>
+                        <span style={{
+                          ...styles.badge,
+                          backgroundColor: getRankingColor(speaker.ranking)
+                        }}>
+                          {speaker.ranking}
+                        </span>
+                      </td>
+                      <td style={styles.td}>{speaker.notes}</td>
+                      <td style={styles.td}>{speaker.host}</td>
+                      <td style={styles.td}>{speaker.proposed_by_name}</td>
+                      <td style={styles.td}>
+                        <button 
+                          onClick={() => onEditSpeaker(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
+                          Edit
+                        </button>
+                        <button 
+                          onClick={() => onAcceptSpeaker(speaker.id)}
+                          style={{...styles.actionBtn, ...styles.acceptBtn}}>
+                          Accept
+                        </button>
+                        <button 
+                          onClick={() => onRejectSpeaker(speaker.id)}
+                          style={{...styles.actionBtn, ...styles.declineBtn}}>
+                          Reject
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div style={styles.section}>
+            <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
+            {invitedSpeakers.length === 0 ? (
+              <p style={styles.emptyText}>No pending invitations</p>
+            ) : (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Name</th>
+                    <th style={styles.th}>Email</th>
+                    <th style={styles.th}>Invited On</th>
+                    <th style={styles.th}>Deadline</th>
+                    <th style={styles.th}>Host</th>
+                    <th style={styles.th}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invitedSpeakers.map(speaker => (
+                    <tr 
+                      key={speaker.id}
+                      style={isInvitationOverdue(speaker) ? {backgroundColor: '#ffe0b2'} : {}}
+                    >
+                      <td style={styles.td}>
+                        {speaker.full_name}
+                        {isInvitationOverdue(speaker) && (
+                          <span style={{marginLeft: '8px', color: '#ff9800', fontWeight: '600'}}>⚠️</span>
+                        )}
+                      </td>
+                      <td style={styles.td}>{speaker.email}</td>
+                      <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
+                      <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
+                      <td style={styles.td}>{speaker.host}</td>
+                      <td style={styles.td}>
+                        <button 
+                          onClick={() => onResendInvitation(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
+                          Resend/View
+                        </button>
+                        <button 
+                          onClick={() => onViewActions(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
+                          Actions
+                        </button>
+                        <button 
+                          onClick={() => onDeleteInvited(speaker.id)}
+                          style={{...styles.actionBtn, ...styles.declineBtn}}>
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div style={styles.section}>
+            <h3 style={styles.subsectionTitle}>Confirmed Upcoming Speakers ({acceptedSpeakers.length})</h3>
+            <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
+              Showing only upcoming speakers. View all past speakers in the "Past Speakers" tab.
+            </p>
+            {acceptedSpeakers.length === 0 ? (
+              <p style={styles.emptyText}>No confirmed upcoming speakers</p>
+            ) : (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Name</th>
+                    <th style={styles.th}>Talk Title</th>
+                    <th style={styles.th}>Date</th>
+                    <th style={styles.th}>Host</th>
+                    <th style={styles.th}>Abstract</th>
+                    <th style={styles.th}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {acceptedSpeakers.map(speaker => (
+                    <tr key={speaker.id}>
+                      <td style={styles.td}>{speaker.full_name}</td>
+                      <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
+                      <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+                      <td style={styles.td}>{speaker.host}</td>
+                      <td style={styles.td}>
+                        {speaker.talk_abstract ? (
+                          <span style={styles.abstractPreview} title={speaker.talk_abstract}>
+                            {speaker.talk_abstract.substring(0, 50)}...
+                          </span>
+                        ) : (
+                          <em style={{color: '#999'}}>No abstract</em>
+                        )}
+                      </td>
+                      <td style={styles.td}>
+                        <button 
+                          onClick={() => onViewAgenda(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
+                          Agenda
+                        </button>
+                        <button 
+                          onClick={() => onGeneratePoster(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#16a085'}}>
+                          Poster
+                        </button>
+                        <button 
+                          onClick={() => onEditConfirmed(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
+                          Edit
+                        </button>
+                        <button 
+                          onClick={() => onViewActions(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
+                          Actions
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Senior Fellow Dashboard
+  const mySpeakers = speakers.filter(s => s.proposed_by_id === userRole.id);
+  const allProposedSpeakers = speakers.filter(s => s.status === 'Proposed');
+  const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const acceptedSpeakers = speakers.filter(s => {
+    if (s.status !== 'Accepted') return false;
+    if (!s.assigned_date) return true;
+    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
+    return speakerDate >= today;
+  });
+
+  return (
+    <div style={styles.dashboardContainer}>
+      {recentResponses.length > 0 && (
+        <NotificationPanel 
+          responses={recentResponses} 
+          currentUser={userRole}
+          formatDate={formatDate}
+        />
+      )}
+      <div style={styles.dashboardMain}>
+        <h2 style={styles.sectionTitle}>Senior Fellow Dashboard</h2>
         
         <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>Proposed Speakers Awaiting Approval ({proposedSpeakers.length})</h3>
-          {proposedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No speakers pending approval</p>
+          <h3 style={styles.subsectionTitle}>All Proposed Speakers ({allProposedSpeakers.length})</h3>
+          {allProposedSpeakers.length === 0 ? (
+            <p style={styles.emptyText}>No speakers have been proposed yet</p>
           ) : (
             <table style={styles.table}>
               <thead>
                 <tr>
                   <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Email</th>
                   <th style={styles.th}>Affiliation</th>
                   <th style={styles.th}>Country</th>
                   <th style={styles.th}>Expertise</th>
@@ -3315,14 +3634,19 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                   <th style={styles.th}>Notes</th>
                   <th style={styles.th}>Host</th>
                   <th style={styles.th}>Proposed By</th>
-                  <th style={styles.th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {proposedSpeakers.map(speaker => (
-                  <tr key={speaker.id}>
-                    <td style={styles.td}>{speaker.full_name}</td>
-                    <td style={styles.td}>{speaker.email}</td>
+                {allProposedSpeakers.map(speaker => (
+                  <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
+                    <td style={styles.td}>
+                      {speaker.full_name}
+                      {speaker.proposed_by_id === userRole.id && (
+                        <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
+                          (You)
+                        </span>
+                      )}
+                    </td>
                     <td style={styles.td}>{speaker.affiliation}</td>
                     <td style={styles.td}>{speaker.country || 'N/A'}</td>
                     <td style={styles.td}>{speaker.area_of_expertise}</td>
@@ -3337,23 +3661,6 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                     <td style={styles.td}>{speaker.notes}</td>
                     <td style={styles.td}>{speaker.host}</td>
                     <td style={styles.td}>{speaker.proposed_by_name}</td>
-                    <td style={styles.td}>
-                      <button 
-                        onClick={() => onEditSpeaker(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                        Edit
-                      </button>
-                      <button 
-                        onClick={() => onAcceptSpeaker(speaker.id)}
-                        style={{...styles.actionBtn, ...styles.acceptBtn}}>
-                        Accept
-                      </button>
-                      <button 
-                        onClick={() => onRejectSpeaker(speaker.id)}
-                        style={{...styles.actionBtn, ...styles.declineBtn}}>
-                        Reject
-                      </button>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -3371,44 +3678,46 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                 <tr>
                   <th style={styles.th}>Name</th>
                   <th style={styles.th}>Email</th>
+                  <th style={styles.th}>Expertise</th>
+                  <th style={styles.th}>Host</th>
                   <th style={styles.th}>Invited On</th>
                   <th style={styles.th}>Deadline</th>
-                  <th style={styles.th}>Host</th>
                   <th style={styles.th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {invitedSpeakers.map(speaker => (
                   <tr 
-                    key={speaker.id}
-                    style={isInvitationOverdue(speaker) ? {backgroundColor: '#ffe0b2'} : {}}
+                    key={speaker.id} 
+                    style={{
+                      ...(speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}),
+                      ...(isInvitationOverdue(speaker) ? {backgroundColor: '#ffe0b2'} : {})
+                    }}
                   >
                     <td style={styles.td}>
                       {speaker.full_name}
+                      {speaker.proposed_by_id === userRole.id && (
+                        <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
+                          (Your proposal)
+                        </span>
+                      )}
                       {isInvitationOverdue(speaker) && (
                         <span style={{marginLeft: '8px', color: '#ff9800', fontWeight: '600'}}>⚠️</span>
                       )}
                     </td>
                     <td style={styles.td}>{speaker.email}</td>
+                    <td style={styles.td}>{speaker.area_of_expertise}</td>
+                    <td style={styles.td}>{speaker.host}</td>
                     <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
                     <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
-                    <td style={styles.td}>{speaker.host}</td>
                     <td style={styles.td}>
-                      <button 
-                        onClick={() => onResendInvitation(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                        Resend/View
-                      </button>
-                      <button 
-                        onClick={() => onViewActions(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
-                        Actions
-                      </button>
-                      <button 
-                        onClick={() => onDeleteInvited(speaker.id)}
-                        style={{...styles.actionBtn, ...styles.declineBtn}}>
-                        Delete
-                      </button>
+                      {(speaker.host === userRole.full_name || speaker.proposed_by_id === userRole.id) && (
+                        <button 
+                          onClick={() => onResendInvitation(speaker)}
+                          style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
+                          Resend/View
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -3432,47 +3741,40 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                   <th style={styles.th}>Talk Title</th>
                   <th style={styles.th}>Date</th>
                   <th style={styles.th}>Host</th>
-                  <th style={styles.th}>Abstract</th>
+                  <th style={styles.th}>Proposed By</th>
                   <th style={styles.th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {acceptedSpeakers.map(speaker => (
-                  <tr key={speaker.id}>
-                    <td style={styles.td}>{speaker.full_name}</td>
+                  <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
+                    <td style={styles.td}>
+                      {speaker.full_name}
+                      {speaker.proposed_by_id === userRole.id && (
+                        <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
+                          (Your proposal)
+                        </span>
+                      )}
+                    </td>
                     <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
                     <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
                     <td style={styles.td}>{speaker.host}</td>
+                    <td style={styles.td}>{speaker.proposed_by_name}</td>
                     <td style={styles.td}>
-                      {speaker.talk_abstract ? (
-                        <span style={styles.abstractPreview} title={speaker.talk_abstract}>
-                          {speaker.talk_abstract.substring(0, 50)}...
-                        </span>
-                      ) : (
-                        <em style={{color: '#999'}}>No abstract</em>
+                      {speaker.host === userRole.full_name && (
+                        <>
+                          <button 
+                            onClick={() => onViewAgenda(speaker)}
+                            style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
+                            Agenda
+                          </button>
+                          <button 
+                            onClick={() => onGeneratePoster(speaker)}
+                            style={{...styles.actionBtn, backgroundColor: '#16a085'}}>
+                            Poster
+                          </button>
+                        </>
                       )}
-                    </td>
-                    <td style={styles.td}>
-                      <button 
-                        onClick={() => onViewAgenda(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
-                        Agenda
-                      </button>
-                      <button 
-                        onClick={() => onGeneratePoster(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#16a085'}}>
-                        Poster
-                      </button>
-                      <button 
-                        onClick={() => onEditConfirmed(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                        Edit
-                      </button>
-                      <button 
-                        onClick={() => onViewActions(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                        Actions
-                      </button>
                     </td>
                   </tr>
                 ))}
@@ -3480,204 +3782,19 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
             </table>
           )}
         </div>
-      </div>
-    );
-  }
 
-  // Senior Fellow Dashboard
-  const mySpeakers = speakers.filter(s => s.proposed_by_id === userRole.id);
-  const allProposedSpeakers = speakers.filter(s => s.status === 'Proposed');
-  const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
-  
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const acceptedSpeakers = speakers.filter(s => {
-    if (s.status !== 'Accepted') return false;
-    if (!s.assigned_date) return true;
-    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
-    return speakerDate >= today;
-  });
-
-  return (
-    <div>
-      <h2 style={styles.sectionTitle}>Senior Fellow Dashboard</h2>
-      
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>All Proposed Speakers ({allProposedSpeakers.length})</h3>
-        {allProposedSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>No speakers have been proposed yet</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Affiliation</th>
-                <th style={styles.th}>Country</th>
-                <th style={styles.th}>Expertise</th>
-                <th style={styles.th}>Ranking</th>
-                <th style={styles.th}>Notes</th>
-                <th style={styles.th}>Host</th>
-                <th style={styles.th}>Proposed By</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allProposedSpeakers.map(speaker => (
-                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                  <td style={styles.td}>
-                    {speaker.full_name}
-                    {speaker.proposed_by_id === userRole.id && (
-                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                        (You)
-                      </span>
-                    )}
-                  </td>
-                  <td style={styles.td}>{speaker.affiliation}</td>
-                  <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                  <td style={styles.td}>{speaker.area_of_expertise}</td>
-                  <td style={styles.td}>
-                    <span style={{
-                      ...styles.badge,
-                      backgroundColor: getRankingColor(speaker.ranking)
-                    }}>
-                      {speaker.ranking}
-                    </span>
-                  </td>
-                  <td style={styles.td}>{speaker.notes}</td>
-                  <td style={styles.td}>{speaker.host}</td>
-                  <td style={styles.td}>{speaker.proposed_by_name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
-        {invitedSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>No pending invitations</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Expertise</th>
-                <th style={styles.th}>Host</th>
-                <th style={styles.th}>Invited On</th>
-                <th style={styles.th}>Deadline</th>
-                <th style={styles.th}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invitedSpeakers.map(speaker => (
-                <tr 
-                  key={speaker.id} 
-                  style={{
-                    ...(speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}),
-                    ...(isInvitationOverdue(speaker) ? {backgroundColor: '#ffe0b2'} : {})
-                  }}
-                >
-                  <td style={styles.td}>
-                    {speaker.full_name}
-                    {speaker.proposed_by_id === userRole.id && (
-                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                        (Your proposal)
-                      </span>
-                    )}
-                    {isInvitationOverdue(speaker) && (
-                      <span style={{marginLeft: '8px', color: '#ff9800', fontWeight: '600'}}>⚠️</span>
-                    )}
-                  </td>
-                  <td style={styles.td}>{speaker.email}</td>
-                  <td style={styles.td}>{speaker.area_of_expertise}</td>
-                  <td style={styles.td}>{speaker.host}</td>
-                  <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
-                  <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
-                  <td style={styles.td}>
-                    {(speaker.host === userRole.full_name || speaker.proposed_by_id === userRole.id) && (
-                      <button 
-                        onClick={() => onResendInvitation(speaker)}
-                        style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                        Resend/View
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>Confirmed Upcoming Speakers ({acceptedSpeakers.length})</h3>
-        <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
-          Showing only upcoming speakers. View all past speakers in the "Past Speakers" tab.
-        </p>
-        {acceptedSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>No confirmed upcoming speakers</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Talk Title</th>
-                <th style={styles.th}>Date</th>
-                <th style={styles.th}>Host</th>
-                <th style={styles.th}>Proposed By</th>
-                <th style={styles.th}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {acceptedSpeakers.map(speaker => (
-                <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                  <td style={styles.td}>
-                    {speaker.full_name}
-                    {speaker.proposed_by_id === userRole.id && (
-                      <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                        (Your proposal)
-                      </span>
-                    )}
-                  </td>
-                  <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                  <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                  <td style={styles.td}>{speaker.host}</td>
-                  <td style={styles.td}>{speaker.proposed_by_name}</td>
-                  <td style={styles.td}>
-                    {speaker.host === userRole.full_name && (
-                      <>
-                        <button 
-                          onClick={() => onViewAgenda(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
-                          Agenda
-                        </button>
-                        <button 
-                          onClick={() => onGeneratePoster(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#16a085'}}>
-                          Poster
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>My Proposals Summary</h3>
-        <p style={{fontSize: '16px', color: '#555'}}>
-          You have proposed <strong>{mySpeakers.length}</strong> speaker(s):
-        </p>
-        <ul style={{fontSize: '15px', color: '#555', lineHeight: '1.8'}}>
-          <li>Proposed: <strong>{mySpeakers.filter(s => s.status === 'Proposed').length}</strong></li>
-          <li>Invited (awaiting response): <strong>{mySpeakers.filter(s => s.status === 'Invited').length}</strong></li>
-          <li>Accepted: <strong>{mySpeakers.filter(s => s.status === 'Accepted').length}</strong></li>
-          <li>Declined: <strong>{mySpeakers.filter(s => s.status === 'Declined').length}</strong></li>
-        </ul>
+        <div style={styles.section}>
+          <h3 style={styles.subsectionTitle}>My Proposals Summary</h3>
+          <p style={{fontSize: '16px', color: '#555'}}>
+            You have proposed <strong>{mySpeakers.length}</strong> speaker(s):
+          </p>
+          <ul style={{fontSize: '15px', color: '#555', lineHeight: '1.8'}}>
+            <li>Proposed: <strong>{mySpeakers.filter(s => s.status === 'Proposed').length}</strong></li>
+            <li>Invited (awaiting response): <strong>{mySpeakers.filter(s => s.status === 'Invited').length}</strong></li>
+            <li>Accepted: <strong>{mySpeakers.filter(s => s.status === 'Accepted').length}</strong></li>
+            <li>Declined: <strong>{mySpeakers.filter(s => s.status === 'Declined').length}</strong></li>
+          </ul>
+        </div>
       </div>
     </div>
   );
@@ -3848,6 +3965,20 @@ const ManageUsersView = ({ users, currentUserId, onEditUser, onDeleteUser, onPas
 };
 
 const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpeaker, getRankingColor, getStatusColor, formatDate }) => {
+  // Filter out past speakers - only show speakers that are still in process
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const activeSpeakers = speakers.filter(s => {
+    // Show all non-accepted speakers (Proposed, Invited, Declined)
+    if (s.status !== 'Accepted') return true;
+    
+    // For accepted speakers, only show if talk hasn't happened yet
+    if (!s.assigned_date) return true;
+    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
+    return speakerDate >= today;
+  });
+
   return (
     <div>
       <div style={styles.sectionHeader}>
@@ -3856,9 +3987,12 @@ const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpe
       </div>
 
       <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>My Proposed Speakers</h3>
-        {speakers.length === 0 ? (
-          <p style={styles.emptyText}>You haven't proposed any speakers yet</p>
+        <h3 style={styles.subsectionTitle}>My Active Speaker Proposals ({activeSpeakers.length})</h3>
+        <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
+          Showing only active proposals and upcoming speakers. Past speakers are not shown here.
+        </p>
+        {activeSpeakers.length === 0 ? (
+          <p style={styles.emptyText}>You haven't proposed any active speakers</p>
         ) : (
           <table style={styles.table}>
             <thead>
@@ -3876,7 +4010,7 @@ const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpe
               </tr>
             </thead>
             <tbody>
-              {speakers.map(speaker => (
+              {activeSpeakers.map(speaker => (
                 <tr key={speaker.id}>
                   <td style={styles.td}>{speaker.full_name}</td>
                   <td style={styles.td}>{speaker.email}</td>
@@ -3900,7 +4034,7 @@ const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpe
                     </span>
                   </td>
                   <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                  <td style={styles.td}>{formatDate(speaker.notes)}</td>
+                  <td style={styles.td}>{speaker.notes}</td>
                   <td style={styles.td}>
                     {speaker.status === 'Proposed' && (
                       <>
@@ -4905,6 +5039,78 @@ const styles = {
     color: '#555',
     cursor: 'help',
   },
+
+  dashboardContainer: {
+    display: 'flex',
+    gap: '20px',
+  },
+  dashboardMain: {
+    flex: 1,
+  },
+  notificationPanel: {
+    width: '350px',
+    backgroundColor: 'white',
+    padding: '20px',
+    borderRadius: '8px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    alignSelf: 'flex-start',
+    position: 'sticky',
+    top: '30px',
+    maxHeight: 'calc(100vh - 180px)',
+    overflowY: 'auto',
+  },
+  notificationTitle: {
+    margin: '0 0 15px 0',
+    fontSize: '18px',
+    color: '#2c3e50',
+    fontWeight: '600',
+    borderBottom: '2px solid #e0e0e0',
+    paddingBottom: '10px',
+  },
+  notificationItem: {
+    padding: '12px',
+    borderRadius: '6px',
+    marginBottom: '12px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    position: 'relative',
+  },
+  notificationContent: {
+    flex: 1,
+  },
+  notificationHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    marginBottom: '8px',
+    fontSize: '14px',
+    flexWrap: 'wrap',
+  },
+  notificationBadge: {
+    marginLeft: '8px',
+    padding: '2px 8px',
+    backgroundColor: '#3498db',
+    color: 'white',
+    borderRadius: '10px',
+    fontSize: '11px',
+    fontWeight: '600',
+  },
+  notificationDetails: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '5px',
+  },
+  notificationDismiss: {
+    background: 'none',
+    border: 'none',
+    fontSize: '24px',
+    color: '#999',
+    cursor: 'pointer',
+    padding: '0 4px',
+    lineHeight: '1',
+    marginLeft: '8px',
+  },
+
   agendaSidebar: {
     width: '700px',
     backgroundColor: 'white',
