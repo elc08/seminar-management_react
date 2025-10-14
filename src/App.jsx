@@ -1399,6 +1399,7 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
     country: '',
     area_of_expertise: '',
     ranking: 'Medium Priority',
+    notes: '',
     host: currentUser?.full_name || ''
   });
 
@@ -1475,6 +1476,15 @@ const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countr
             <option value="Medium Priority">Medium Priority</option>
             <option value="Low Priority">Low Priority</option>
           </select>
+
+          <label style={styles.label}>Notes:</label>
+          <input
+            type="text"
+            value={formData.notes}
+            onChange={(e) => setFormData({...formData, notes: e.target.value})}
+            style={styles.input}
+            required
+          />
 
           <label style={styles.label}>Host: *</label>
           <select
@@ -3302,6 +3312,7 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                   <th style={styles.th}>Country</th>
                   <th style={styles.th}>Expertise</th>
                   <th style={styles.th}>Ranking</th>
+                  <th style={styles.th}>Notes</th>
                   <th style={styles.th}>Host</th>
                   <th style={styles.th}>Proposed By</th>
                   <th style={styles.th}>Actions</th>
@@ -3323,6 +3334,7 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                         {speaker.ranking}
                       </span>
                     </td>
+                    <td style={styles.td}>{speaker.notes}</td>
                     <td style={styles.td}>{speaker.host}</td>
                     <td style={styles.td}>{speaker.proposed_by_name}</td>
                     <td style={styles.td}>
@@ -3503,6 +3515,7 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                 <th style={styles.th}>Country</th>
                 <th style={styles.th}>Expertise</th>
                 <th style={styles.th}>Ranking</th>
+                <th style={styles.th}>Notes</th>
                 <th style={styles.th}>Host</th>
                 <th style={styles.th}>Proposed By</th>
               </tr>
@@ -3529,6 +3542,7 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
                       {speaker.ranking}
                     </span>
                   </td>
+                  <td style={styles.td}>{speaker.notes}</td>
                   <td style={styles.td}>{speaker.host}</td>
                   <td style={styles.td}>{speaker.proposed_by_name}</td>
                 </tr>
@@ -3857,6 +3871,7 @@ const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpe
                 <th style={styles.th}>Ranking</th>
                 <th style={styles.th}>Status</th>
                 <th style={styles.th}>Date</th>
+                <th style={styles.th}>Notes</th>
                 <th style={styles.th}>Actions</th>
               </tr>
             </thead>
@@ -3885,6 +3900,7 @@ const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpe
                     </span>
                   </td>
                   <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+                  <td style={styles.td}>{formatDate(speaker.notes)}</td>
                   <td style={styles.td}>
                     {speaker.status === 'Proposed' && (
                       <>
