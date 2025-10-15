@@ -1,20 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+// src/App.jsx
+import React, { useState, useEffect, useCallback, useMemo} from 'react';
 import { getData as getCountryData } from 'country-list';
-import { 
-  signInWithEmailAndPassword, 
-  signOut, 
+import {
+  signInWithEmailAndPassword,
+  signOut,
   onAuthStateChanged,
   createUserWithEmailAndPassword,
-  sendPasswordResetEmail
 } from 'firebase/auth';
-import { 
-  collection, 
-  addDoc, 
+import {
+  collection,
+  addDoc,
   updateDoc,
-  doc, 
-  getDocs, 
+  doc,
+  getDocs,
   getDoc,
-  query, 
+  query,
   where,
   orderBy,
   Timestamp,
@@ -23,12 +23,26 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer
+} from 'recharts';
 import { X, CheckCircle, Mail, Plane, Send } from 'lucide-react';
 
-// Get all countries and organize them
-const allCountriesFromPackage = getCountryData().map(c => c.name).sort();
+/* ============================================================
+   Constants, helpers & theme notes
+   - Add colors to tailwind.config.js (primary/accent/neutral)
+   ============================================================ */
 
+const allCountriesFromPackage = getCountryData().map(c => c.name).sort();
 const europeanCountries = [
   'Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic',
   'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece',
@@ -45,22 +59,42 @@ const COUNTRIES = [
   ...allCountriesFromPackage.filter(c => c !== 'Spain' && !europeanCountries.includes(c))
 ];
 
-const App = () => {
+const generateToken = () => Math.random().toString(36).substring(2) + Date.now().toString(36);
+
+const formatDate = (timestamp) => {
+  if (!timestamp) return 'N/A';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+// Helper function to safely convert Firestore timestamps to Date
+const safeToDate = (val) => {
+  if (!val) return null;
+  if (val.toDate) return val.toDate();
+  if (val instanceof Date) return val;
+  return new Date(val);
+};
+/* ============================================================
+   App - main
+   ============================================================ */
+
+export default function App() {
   // Auth & User State
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  // Data State
+  // Domain Data State
   const [speakers, setSpeakers] = useState([]);
   const [availableDates, setAvailableDates] = useState([]);
   const [invitations, setInvitations] = useState([]);
   const [seniorFellows, setSeniorFellows] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [agendas, setAgendas] = useState([]);
+  const [userAvailability, setUserAvailability] = useState([]);
 
-  // Form State
+  // UI State
   const [showAddDateForm, setShowAddDateForm] = useState(false);
   const [showAddSpeakerForm, setShowAddSpeakerForm] = useState(false);
   const [showAddPastSpeakerForm, setShowAddPastSpeakerForm] = useState(false);
@@ -72,7 +106,6 @@ const App = () => {
   const [editingSpeaker, setEditingSpeaker] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
 
-  // Sidebar State
   const [sidebarSpeaker, setSidebarSpeaker] = useState(null);
   const [showSidebar, setShowSidebar] = useState(false);
   const [showAgendaSidebar, setShowAgendaSidebar] = useState(false);
@@ -82,77 +115,77 @@ const App = () => {
   const [showPosterSidebar, setShowPosterSidebar] = useState(false);
   const [posterSpeaker, setPosterSpeaker] = useState(null);
 
-  // Speaker Token Access
   const [speakerAccess, setSpeakerAccess] = useState(null);
-  
-  // Signup Token Access
   const [signupInvitation, setSignupInvitation] = useState(null);
   const [loadingSignup, setLoadingSignup] = useState(false);
 
-  // Load data functions
+  const [showPasswordResetPanel, setShowPasswordResetPanel] = useState(false);
+  const [passwordResetUser, setPasswordResetUser] = useState(null);
+  const [showInvitationPanel, setShowInvitationPanel] = useState(false);
+  const [invitationData, setInvitationData] = useState(null);
+  /* ---------------------------
+     Data Loaders (Firestore)
+     --------------------------- */
   const loadSpeakers = useCallback(async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'speakers'));
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSpeakers(data);
-    } catch (error) {
-      console.error('Error loading speakers:', error);
+      const snap = await getDocs(collection(db, 'speakers'));
+      setSpeakers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadSpeakers', err);
     }
   }, []);
 
   const loadAvailableDates = useCallback(async () => {
     try {
-      const querySnapshot = await getDocs(
-        query(collection(db, 'available_dates'), orderBy('date', 'asc'))
-      );
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAvailableDates(data);
-    } catch (error) {
-      console.error('Error loading dates:', error);
+      const snap = await getDocs(query(collection(db, 'available_dates'), orderBy('date', 'asc')));
+      setAvailableDates(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadAvailableDates', err);
     }
   }, []);
 
   const loadInvitations = useCallback(async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'invitations'));
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setInvitations(data);
-    } catch (error) {
-      console.error('Error loading invitations:', error);
+      const snap = await getDocs(collection(db, 'invitations'));
+      setInvitations(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadInvitations', err);
     }
   }, []);
 
   const loadSeniorFellows = useCallback(async () => {
     try {
-      const querySnapshot = await getDocs(
-        query(collection(db, 'user_roles'), where('role', 'in', ['Senior Fellow', 'Organizer']))
-      );
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSeniorFellows(data);
-    } catch (error) {
-      console.error('Error loading senior fellows:', error);
+      const snap = await getDocs(query(collection(db, 'user_roles'), where('role', 'in', ['Senior Fellow', 'Fellow', 'Organizer'])));
+      setSeniorFellows(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadSeniorFellows', err);
     }
   }, []);
 
   const loadAllUsers = useCallback(async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'user_roles'));
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAllUsers(data);
-    } catch (error) {
-      console.error('Error loading all users:', error);
+      const snap = await getDocs(collection(db, 'user_roles'));
+      setAllUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadAllUsers', err);
     }
   }, []);
 
   const loadAgendas = useCallback(async () => {
     try {
-      const querySnapshot = await getDocs(
-        query(collection(db, 'agendas'), orderBy('seminar_date', 'desc'))
-      );
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAgendas(data);
-    } catch (error) {
-      console.error('Error loading agendas:', error);
+      const snap = await getDocs(query(collection(db, 'agendas'), orderBy('seminar_date', 'desc')));
+      setAgendas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadAgendas', err);
+    }
+  }, []);
+
+  const loadUserAvailability = useCallback(async () => {
+    try {
+      const snap = await getDocs(collection(db, 'user_availability'));
+      setUserAvailability(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadUserAvailability', err);
     }
   }, []);
 
@@ -163,87 +196,129 @@ const App = () => {
       loadInvitations(),
       loadSeniorFellows(),
       loadAllUsers(),
-      loadAgendas()
+      loadAgendas(),
+      loadUserAvailability()
     ]);
-  }, [loadSpeakers, loadAvailableDates, loadInvitations, loadSeniorFellows, loadAllUsers, loadAgendas]);
+  }, [loadSpeakers, loadAvailableDates, loadInvitations, loadSeniorFellows, loadAllUsers, loadAgendas, loadUserAvailability]);
 
+
+/* ---------------------------
+   Lunch reservation alerts (1 week before)
+   --------------------------- */
+   const upcomingLunchReminders = useMemo(() => {
+    if (!userRole) return [];
+    
+    const oneWeekFromNow = new Date();
+    oneWeekFromNow.setDate(oneWeekFromNow.getDate() + 7);
+    oneWeekFromNow.setHours(0, 0, 0, 0);
+    
+    const oneWeekAndOneDay = new Date(oneWeekFromNow);
+    oneWeekAndOneDay.setDate(oneWeekAndOneDay.getDate() + 1);
+    
+    return speakers.filter(speaker => {
+      if (speaker.status !== 'Accepted' || !speaker.assigned_date) return false;
+      
+      // Check if user is host or organizer
+      const isRelevant = userRole.role === 'Organizer' || speaker.host === userRole.full_name;
+      if (!isRelevant) return false;
+      
+      const speakerDate = speaker.assigned_date.toDate ? speaker.assigned_date.toDate() : new Date(speaker.assigned_date);
+      speakerDate.setHours(0, 0, 0, 0);
+      
+      // Check if exactly 7 days from now
+      return speakerDate >= oneWeekFromNow && speakerDate < oneWeekAndOneDay;
+    });
+  }, [speakers, userRole]);
+
+  useEffect(() => {
+    if (upcomingLunchReminders.length > 0) {
+      upcomingLunchReminders.forEach(speaker => {
+        console.log(`⏰ Reminder: ${speaker.full_name}'s seminar is in one week (${formatDate(speaker.assigned_date)}). Don't forget to make lunch reservations!`);
+      });
+    }
+  }, [upcomingLunchReminders]);
+
+  /* ---------------------------
+     Token / Signup handling
+     --------------------------- */
   const loadSpeakerByToken = useCallback(async (token) => {
     try {
-      const speakersRef = collection(db, 'speakers');
-      const q = query(speakersRef, where('access_token', '==', token));
-      const querySnapshot = await getDocs(q);
-      
-      if (!querySnapshot.empty) {
-        const speakerDoc = querySnapshot.docs[0];
-        setSpeakerAccess({ id: speakerDoc.id, ...speakerDoc.data() });
+      const ref = collection(db, 'speakers');
+      const q = query(ref, where('access_token', '==', token));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const sdoc = snap.docs[0];
+        setSpeakerAccess({ id: sdoc.id, ...sdoc.data() });
         await loadAvailableDates();
+        await loadSpeakers();
+        await loadUserAvailability();
       } else {
         alert('Invalid or expired invitation link');
       }
-    } catch (error) {
-      console.error('Error loading speaker:', error);
+    } catch (err) {
+      console.error('loadSpeakerByToken', err);
     }
-  }, [loadAvailableDates]);
+  }, [loadAvailableDates, loadSpeakers, loadUserAvailability]);
 
   const loadUserRole = useCallback(async (uid) => {
     try {
-      const userDoc = await getDoc(doc(db, 'user_roles', uid));
-      if (userDoc.exists()) {
-        setUserRole({ id: uid, ...userDoc.data() });
+      const ud = await getDoc(doc(db, 'user_roles', uid));
+      if (ud.exists()) {
+        setUserRole({ id: uid, ...ud.data() });
         await loadData();
       }
-    } catch (error) {
-      console.error('Error loading user role:', error);
+    } catch (err) {
+      console.error('loadUserRole', err);
     }
   }, [loadData]);
 
+  /* ---------------------------
+     URL param effects
+     --------------------------- */
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const token = urlParams.get('token');
-    if (token) {
-      loadSpeakerByToken(token);
-    }
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    if (token) loadSpeakerByToken(token);
   }, [loadSpeakerByToken]);
 
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const signupToken = urlParams.get('signup');
+    const params = new URLSearchParams(window.location.search);
+    const signupToken = params.get('signup');
     if (signupToken && !user) {
       setLoadingSignup(true);
-      const loadSignupInvitation = async () => {
+      (async () => {
         try {
-          const invitationsRef = collection(db, 'invitations');
-          const q = query(invitationsRef, where('token', '==', signupToken), where('used', '==', false));
-          const querySnapshot = await getDocs(q);
-          
-          if (!querySnapshot.empty) {
-            const invDoc = querySnapshot.docs[0];
+          const ref = collection(db, 'invitations');
+          const q = query(ref, where('token', '==', signupToken), where('used', '==', false));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            const invDoc = snap.docs[0];
             const invitation = { id: invDoc.id, ...invDoc.data() };
-            
             const expiresAt = invitation.expires_at.toDate();
             if (expiresAt < new Date()) {
               alert('This invitation has expired. Please contact the organizer for a new invitation.');
               setLoadingSignup(false);
               return;
             }
-            
             setSignupInvitation(invitation);
           } else {
             alert('Invalid or already used invitation link.');
           }
-          setLoadingSignup(false);
-        } catch (error) {
-          console.error('Error loading invitation:', error);
+        } catch (err) {
+          console.error('signup token load', err);
           alert('Error loading invitation. Please try again.');
+        } finally {
           setLoadingSignup(false);
         }
-      };
-      loadSignupInvitation();
+      })();
     }
   }, [user]);
 
+  /* ---------------------------
+     Auth listener
+     --------------------------- */
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsub = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
         await loadUserRole(currentUser.uid);
@@ -253,27 +328,24 @@ const App = () => {
       }
       setLoading(false);
     });
-    return unsubscribe;
+    return () => unsub();
   }, [loadUserRole]);
 
+  /* ---------------------------
+     Auth handlers
+     --------------------------- */
   const handleLogin = async (email, password) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
-    } catch (error) {
-      alert('Login failed: ' + error.message);
+    } catch (err) {
+      alert('Login failed: ' + (err.message || err));
     }
   };
 
   const handleSignup = async (password) => {
     if (!signupInvitation) return;
-    
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth, 
-        signupInvitation.email, 
-        password
-      );
-      
+      const userCredential = await createUserWithEmailAndPassword(auth, signupInvitation.email, password);
       await setDoc(doc(db, 'user_roles', userCredential.user.uid), {
         email: signupInvitation.email,
         full_name: signupInvitation.full_name,
@@ -281,20 +353,17 @@ const App = () => {
         role: signupInvitation.role,
         createdAt: serverTimestamp()
       });
-      
       await updateDoc(doc(db, 'invitations', signupInvitation.id), {
         used: true,
         used_at: serverTimestamp()
       });
-      
       setSignupInvitation(null);
       window.history.replaceState({}, document.title, window.location.pathname);
-      
-    } catch (error) {
-      if (error.code === 'auth/email-already-in-use') {
+    } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
         alert('An account with this email already exists. Please login instead.');
       } else {
-        alert('Signup failed: ' + error.message);
+        alert('Signup failed: ' + (err.message || err));
       }
     }
   };
@@ -302,28 +371,27 @@ const App = () => {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-    } catch (error) {
-      console.error('Logout error:', error);
+    } catch (err) {
+      console.error('Logout error:', err);
     }
   };
 
+  /* ---------------------------
+     Speaker / Date / Invitation handlers
+     --------------------------- */
   const handleAddDate = async (formData) => {
     try {
       const newDate = new Date(formData.date);
       const newDateString = newDate.toISOString().split('T')[0];
-      
-      const duplicateDate = availableDates.find(d => {
+      const duplicate = availableDates.find(d => {
         if (d.locked_by_id === 'DELETED') return false;
-        const existingDate = d.date.toDate ? d.date.toDate() : new Date(d.date);
-        const existingDateString = existingDate.toISOString().split('T')[0];
-        return existingDateString === newDateString;
+        const existing = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        return existing.toISOString().split('T')[0] === newDateString;
       });
-      
-      if (duplicateDate) {
-        alert(`This date (${formatDate(duplicateDate.date)}) already exists in the system. Please choose a different date.`);
+      if (duplicate) {
+        alert(`This date (${formatDate(duplicate.date)}) already exists.`);
         return;
       }
-      
       await addDoc(collection(db, 'available_dates'), {
         ...formData,
         date: Timestamp.fromDate(newDate),
@@ -333,8 +401,8 @@ const App = () => {
       });
       await loadAvailableDates();
       setShowAddDateForm(false);
-    } catch (error) {
-      alert('Error adding date: ' + error.message);
+    } catch (err) {
+      alert('Error adding date: ' + (err.message || err));
     }
   };
 
@@ -344,18 +412,15 @@ const App = () => {
       alert('Cannot delete a date that is locked by a speaker.');
       return;
     }
-    
-    if (window.confirm('Are you sure you want to delete this date?')) {
-      try {
-        const dateRef = doc(db, 'available_dates', dateId);
-        await updateDoc(dateRef, {
-          available: false,
-          locked_by_id: 'DELETED'
-        });
-        await loadAvailableDates();
-      } catch (error) {
-        alert('Error deleting date: ' + error.message);
-      }
+    if (!window.confirm('Are you sure you want to delete this date?')) return;
+    try {
+      await updateDoc(doc(db, 'available_dates', dateId), {
+        available: false,
+        locked_by_id: 'DELETED'
+      });
+      await loadAvailableDates();
+    } catch (err) {
+      alert('Error deleting date: ' + (err.message || err));
     }
   };
 
@@ -369,12 +434,13 @@ const App = () => {
         proposed_by_name: userRole.full_name,
         access_token: token,
         actions: [],
+        votes: [],
         createdAt: serverTimestamp()
       });
       await loadSpeakers();
       setShowAddSpeakerForm(false);
-    } catch (error) {
-      alert('Error adding speaker: ' + error.message);
+    } catch (err) {
+      alert('Error adding speaker: ' + (err.message || err));
     }
   };
 
@@ -387,250 +453,219 @@ const App = () => {
         proposed_by_name: userRole.full_name,
         assigned_date: Timestamp.fromDate(new Date(formData.assigned_date)),
         actions: [],
+        votes: [],
         createdAt: serverTimestamp()
       });
       await loadSpeakers();
       setShowAddPastSpeakerForm(false);
       alert('Past speaker added successfully!');
-    } catch (error) {
-      alert('Error adding past speaker: ' + error.message);
+    } catch (err) {
+      alert('Error adding past speaker: ' + (err.message || err));
     }
   };
 
   const handleDeleteSpeaker = async (speakerId) => {
-    if (window.confirm('Are you sure you want to delete this speaker proposal?')) {
-      try {
-        await deleteDoc(doc(db, 'speakers', speakerId));
-        await loadSpeakers();
-        alert('Speaker deleted successfully!');
-      } catch (error) {
-        alert('Error deleting speaker: ' + error.message);
-      }
+    if (!window.confirm('Are you sure you want to delete this speaker proposal?')) return;
+    try {
+      await deleteDoc(doc(db, 'speakers', speakerId));
+      await loadSpeakers();
+      alert('Speaker deleted successfully!');
+    } catch (err) {
+      alert('Error deleting speaker: ' + (err.message || err));
     }
   };
 
   const handleAcceptSpeaker = async (speakerId) => {
     try {
-      const speaker = speakers.find(s => s.id === speakerId);
-      const token = speaker.access_token || generateToken();
-      
-      const actions = speaker.actions || [];
+      const sp = speakers.find(s => s.id === speakerId);
+      const token = sp.access_token || generateToken();
+      const actions = sp.actions || [];
       actions.push({
         type: 'invitation_drafted',
         timestamp: new Date().toISOString(),
         completed: false,
         user: userRole.full_name
       });
-
       await updateDoc(doc(db, 'speakers', speakerId), {
         status: 'Invited',
         access_token: token,
         invitation_sent_date: serverTimestamp(),
         response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
-        actions: actions
+        actions
       });
-      
       await loadSpeakers();
-      
-      // Open sidebar instead of email
-      const updatedSpeaker = { ...speaker, status: 'Invited', access_token: token, actions };
-      setSidebarSpeaker(updatedSpeaker);
+      const updated = { ...sp, status: 'Invited', access_token: token, actions };
+      setSidebarSpeaker(updated);
       setShowSidebar(true);
-    } catch (error) {
-      alert('Error accepting speaker: ' + error.message);
+    } catch (err) {
+      alert('Error accepting speaker: ' + (err.message || err));
     }
   };
 
   const handleResendInvitation = async (speaker) => {
     try {
-      // Reset invitation timestamps
       await updateDoc(doc(db, 'speakers', speaker.id), {
         invitation_sent_date: serverTimestamp(),
         response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
       });
-      
       await loadSpeakers();
-      
-      // Update the speaker object with new timestamps
-      const updatedSpeaker = {
-        ...speaker,
-        invitation_sent_date: Timestamp.now(),
-        response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
-      };
-      
-      setSidebarSpeaker(updatedSpeaker);
+      const updated = { ...speaker, invitation_sent_date: Timestamp.now(), response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)) };
+      setSidebarSpeaker(updated);
       setShowSidebar(true);
-    } catch (error) {
-      alert('Error resending invitation: ' + error.message);
+    } catch (err) {
+      alert('Error resending invitation: ' + (err.message || err));
     }
   };
 
   const handleRejectSpeaker = async (speakerId) => {
-    if (window.confirm('Are you sure you want to reject this speaker?')) {
-      try {
-        await updateDoc(doc(db, 'speakers', speakerId), {
-          status: 'Declined'
-        });
-        await loadSpeakers();
-      } catch (error) {
-        alert('Error rejecting speaker: ' + error.message);
+    if (!window.confirm('Are you sure you want to reject this speaker?')) return;
+    try {
+      await updateDoc(doc(db, 'speakers', speakerId), { status: 'Declined' });
+      await loadSpeakers();
+    } catch (err) {
+      alert('Error rejecting speaker: ' + (err.message || err));
+    }
+  };
+
+  const handleVoteSpeaker = async (speakerId, action) => {
+    try {
+      if (!user) { alert('You must be logged in to vote'); return; }
+      const sp = speakers.find(s => s.id === speakerId);
+      let votes = sp.votes || [];
+      const existing = votes.findIndex(v => v.user_id === user.uid);
+      if (action === 'upvote') {
+        if (existing >= 0) {
+          votes.splice(existing, 1);
+        } else {
+          votes.push({ user_id: user.uid, user_name: userRole.full_name, timestamp: new Date().toISOString() });
+        }
       }
+      await updateDoc(doc(db, 'speakers', speakerId), { votes });
+      await loadSpeakers();
+    } catch (err) {
+      alert('Error voting on speaker: ' + (err.message || err));
     }
   };
 
   const handleUpdateAction = async (speakerId, actionIndex, completed) => {
     try {
-      const speaker = speakers.find(s => s.id === speakerId);
-      const actions = [...(speaker.actions || [])];
+      const sp = speakers.find(s => s.id === speakerId);
+      const actions = [...(sp.actions || [])];
       actions[actionIndex].completed = completed;
       actions[actionIndex].completedAt = completed ? new Date().toISOString() : null;
-      
       await updateDoc(doc(db, 'speakers', speakerId), { actions });
       await loadSpeakers();
-      
       if (sidebarSpeaker && sidebarSpeaker.id === speakerId) {
         setSidebarSpeaker({ ...sidebarSpeaker, actions });
       }
-    } catch (error) {
-      alert('Error updating action: ' + error.message);
+    } catch (err) {
+      alert('Error updating action: ' + (err.message || err));
     }
   };
 
   const handleAddManualAction = async (speakerId, actionType) => {
     try {
-      const speaker = speakers.find(s => s.id === speakerId);
-      const actions = [...(speaker.actions || [])];
+      const sp = speakers.find(s => s.id === speakerId);
+      const actions = [...(sp.actions || [])];
       actions.push({
         type: actionType,
         timestamp: new Date().toISOString(),
         completed: false,
         user: userRole.full_name
       });
-      
       await updateDoc(doc(db, 'speakers', speakerId), { actions });
       await loadSpeakers();
-      
       if (sidebarSpeaker && sidebarSpeaker.id === speakerId) {
         setSidebarSpeaker({ ...sidebarSpeaker, actions });
       }
-    } catch (error) {
-      alert('Error adding action: ' + error.message);
+    } catch (err) {
+      alert('Error adding action: ' + (err.message || err));
     }
   };
 
   const handleEditSpeaker = async (formData) => {
     try {
+      if (!editingSpeaker) return;
       await updateDoc(doc(db, 'speakers', editingSpeaker.id), formData);
       await loadSpeakers();
       setShowEditSpeakerForm(false);
       setEditingSpeaker(null);
-    } catch (error) {
-      alert('Error updating speaker: ' + error.message);
+    } catch (err) {
+      alert('Error updating speaker: ' + (err.message || err));
     }
   };
 
   const handleEditConfirmedSpeaker = async (formData) => {
     try {
+      if (!editingSpeaker) return;
       const updateData = {
         ...formData,
         assigned_date: formData.assigned_date ? Timestamp.fromDate(new Date(formData.assigned_date)) : null
       };
-      
       await updateDoc(doc(db, 'speakers', editingSpeaker.id), updateData);
-      
+
       if (formData.old_date_id && formData.new_date_id && formData.old_date_id !== formData.new_date_id) {
-        await updateDoc(doc(db, 'available_dates', formData.old_date_id), {
-          available: true,
-          locked_by_id: null,
-          talk_title: ''
-        });
-        
-        await updateDoc(doc(db, 'available_dates', formData.new_date_id), {
-          available: false,
-          locked_by_id: editingSpeaker.id,
-          talk_title: formData.talk_title
-        });
+        await updateDoc(doc(db, 'available_dates', formData.old_date_id), { available: true, locked_by_id: null, talk_title: '' });
+        await updateDoc(doc(db, 'available_dates', formData.new_date_id), { available: false, locked_by_id: editingSpeaker.id, talk_title: formData.talk_title });
       } else if (formData.current_date_id) {
-        await updateDoc(doc(db, 'available_dates', formData.current_date_id), {
-          talk_title: formData.talk_title
-        });
+        await updateDoc(doc(db, 'available_dates', formData.current_date_id), { talk_title: formData.talk_title });
       }
-      
+
       await loadSpeakers();
       await loadAvailableDates();
       setShowEditConfirmedForm(false);
       setEditingSpeaker(null);
-    } catch (error) {
-      alert('Error updating confirmed speaker: ' + error.message);
+    } catch (err) {
+      alert('Error updating confirmed speaker: ' + (err.message || err));
     }
   };
 
   const handleDeleteConfirmedSpeaker = async (speakerId) => {
-    if (!window.confirm('Are you sure you want to delete this confirmed speaker? This will also delete their agenda and free up their assigned date.')) {
-      return;
-    }
-
+    if (!window.confirm('Are you sure you want to delete this confirmed speaker? This will also delete their agenda and free up their assigned date.')) return;
     try {
-      // Find and delete the associated agenda
       const speakerAgenda = agendas.find(a => a.speaker_id === speakerId);
       if (speakerAgenda) {
         await deleteDoc(doc(db, 'agendas', speakerAgenda.id));
       }
-      
-      // Unlock the date if one was assigned
       const lockedDate = availableDates.find(d => d.locked_by_id === speakerId);
       if (lockedDate) {
-        await updateDoc(doc(db, 'available_dates', lockedDate.id), {
-          available: true,
-          locked_by_id: null,
-          talk_title: ''
-        });
+        await updateDoc(doc(db, 'available_dates', lockedDate.id), { available: true, locked_by_id: null, talk_title: '' });
       }
-      
-      // Delete the speaker
       await deleteDoc(doc(db, 'speakers', speakerId));
-      
       await loadSpeakers();
       await loadAvailableDates();
       await loadAgendas();
       setShowEditConfirmedForm(false);
       setEditingSpeaker(null);
-      
       alert('Speaker deleted successfully!');
-    } catch (error) {
-      alert('Error deleting speaker: ' + error.message);
+    } catch (err) {
+      alert('Error deleting speaker: ' + (err.message || err));
     }
   };
 
   const handleDeleteInvitedSpeaker = async (speakerId) => {
-    if (!window.confirm('Are you sure you want to delete this invited speaker? This will cancel their invitation.')) {
-      return;
-    }
-
+    if (!window.confirm('Are you sure you want to delete this invited speaker? This will cancel their invitation.')) return;
     try {
-      // Delete the speaker
       await deleteDoc(doc(db, 'speakers', speakerId));
-      
       await loadSpeakers();
       alert('Invited speaker deleted successfully!');
-    } catch (error) {
-      alert('Error deleting speaker: ' + error.message);
+    } catch (err) {
+      alert('Error deleting speaker: ' + (err.message || err));
     }
   };
 
+  /* ---------------------------
+     Speaker accept/decline (speaker access flow)
+     --------------------------- */
   const handleSpeakerAccept = async (dateId, talkTitle, talkAbstract) => {
     try {
       await updateDoc(doc(db, 'available_dates', dateId), {
         available: false,
         locked_by_id: speakerAccess.id,
-        talk_title: talkTitle
+        talk_title: talkTitle || '(TBC)'
       });
-
       const selectedDate = availableDates.find(d => d.id === dateId);
-      
       const actions = speakerAccess.actions || [];
-      
-      // Add speaker responded action
       actions.push({
         type: 'speaker_responded',
         timestamp: new Date().toISOString(),
@@ -638,66 +673,48 @@ const App = () => {
         user: speakerAccess.full_name,
         action: 'accepted'
       });
-
-      // Add travel arrangements action
       actions.push({
         type: 'travel_arrangements',
         timestamp: new Date().toISOString(),
         completed: false,
         user: speakerAccess.full_name
       });
-
       await updateDoc(doc(db, 'speakers', speakerAccess.id), {
         status: 'Accepted',
         assigned_date: selectedDate.date,
-        talk_title: talkTitle,
+        talk_title: talkTitle || '(TBC)',
         talk_abstract: talkAbstract || '',
-        actions: actions
+        actions
       });
-
-      // Create agenda for the visit with seminar talk
-      const visitDate = selectedDate.date.toDate();
-      const dayBefore = new Date(visitDate);
-      dayBefore.setDate(dayBefore.getDate() - 1);
-      const dayAfter = new Date(visitDate);
-      dayAfter.setDate(dayAfter.getDate() + 1);
-
-      // Create the seminar talk event (10-11am on seminar date)
-      const seminarStartTime = new Date(visitDate);
-      seminarStartTime.setHours(10, 0, 0, 0);
-      const seminarEndTime = new Date(visitDate);
-      seminarEndTime.setHours(11, 0, 0, 0);
-
+      const visitDate = safeToDate(selectedDate.date);
+      const dayBefore = new Date(visitDate); dayBefore.setDate(dayBefore.getDate() - 1);
+      const dayAfter = new Date(visitDate); dayAfter.setDate(dayAfter.getDate() + 1);
+      const seminarStart = new Date(visitDate); seminarStart.setHours(10, 0, 0, 0);
+      const seminarEnd = new Date(visitDate); seminarEnd.setHours(11, 0, 0, 0);
       const seminarEvent = {
-        title: talkTitle,
+        title: talkTitle || '(TBC)',
         type: 'seminar',
         date: Timestamp.fromDate(visitDate),
-        start_time: Timestamp.fromDate(seminarStartTime),
-        end_time: Timestamp.fromDate(seminarEndTime),
+        start_time: Timestamp.fromDate(seminarStart),
+        end_time: Timestamp.fromDate(seminarEnd),
         location: selectedDate.notes || 'TBD',
         notes: 'Main seminar presentation',
         attendees: [],
-        is_locked: true // Can't be edited or deleted
+        is_locked: true
       };
-
-      // Create lunch slot (1-2pm on seminar date)
-      const lunchStartTime = new Date(visitDate);
-      lunchStartTime.setHours(13, 0, 0, 0);
-      const lunchEndTime = new Date(visitDate);
-      lunchEndTime.setHours(14, 0, 0, 0);
-
+      const lunchStart = new Date(visitDate); lunchStart.setHours(13, 0, 0, 0);
+      const lunchEnd = new Date(visitDate); lunchEnd.setHours(14, 0, 0, 0);
       const lunchEvent = {
         title: 'Lunch',
         type: 'social',
         date: Timestamp.fromDate(visitDate),
-        start_time: Timestamp.fromDate(lunchStartTime),
-        end_time: Timestamp.fromDate(lunchEndTime),
+        start_time: Timestamp.fromDate(lunchStart),
+        end_time: Timestamp.fromDate(lunchEnd),
         location: '',
         notes: 'Lunch break',
         attendees: [],
         is_locked: false
       };
-
       await addDoc(collection(db, 'agendas'), {
         speaker_id: speakerAccess.id,
         speaker_name: speakerAccess.full_name,
@@ -709,91 +726,92 @@ const App = () => {
         meetings: [seminarEvent, lunchEvent],
         createdAt: serverTimestamp()
       });
-
-      alert('Thank you! Your presentation has been scheduled. The organizers will contact you shortly regarding travel arrangements and to coordinate meetings.');
-      
+      alert('Thank you! Your presentation has been scheduled.');
       await loadAvailableDates();
       await loadAgendas();
       setSpeakerAccess({ ...speakerAccess, status: 'Accepted', actions });
-    } catch (error) {
-      console.error('Error accepting invitation:', error);
-      alert('Error accepting invitation: ' + error.message);
+    } catch (err) {
+      console.error('handleSpeakerAccept', err);
+      alert('Error accepting invitation: ' + (err.message || err));
     }
   };
 
   const handleSpeakerDecline = async () => {
-    if (window.confirm('Are you sure you want to decline this invitation?')) {
-      try {
-        const actions = speakerAccess.actions || [];
-        actions.push({
-          type: 'speaker_responded',
-          timestamp: new Date().toISOString(),
-          completed: true,
-          user: speakerAccess.full_name,
-          action: 'declined'
-        });
+    if (!window.confirm('Are you sure you want to decline this invitation?')) return;
+    try {
+      const actions = speakerAccess.actions || [];
+      actions.push({
+        type: 'speaker_responded',
+        timestamp: new Date().toISOString(),
+        completed: true,
+        user: speakerAccess.full_name,
+        action: 'declined'
+      });
+      await updateDoc(doc(db, 'speakers', speakerAccess.id), {
+        status: 'Declined',
+        actions
+      });
+      alert('Your response has been recorded. Thank you for your time.');
+      setSpeakerAccess({ ...speakerAccess, status: 'Declined', actions });
+    } catch (err) {
+      console.error('handleSpeakerDecline', err);
+      alert('Error declining invitation: ' + (err.message || err));
+    }
+  };
 
-        await updateDoc(doc(db, 'speakers', speakerAccess.id), {
-          status: 'Declined',
-          actions: actions
+  /* ---------------------------
+     Invitation creation
+     --------------------------- */
+     const handleCreateInvitation = async (formData) => {
+      try {
+        const token = generateToken();
+        const signupLink = `${window.location.origin}?signup=${token}`;
+        await addDoc(collection(db, 'invitations'), {
+          ...formData,
+          token,
+          invited_by_id: user.uid,
+          invited_by_name: userRole.full_name,
+          used: false,
+          expires_at: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+          createdAt: serverTimestamp()
         });
         
-        alert('Your response has been recorded. Thank you for your time.');
-        setSpeakerAccess({ ...speakerAccess, status: 'Declined', actions });
-      } catch (error) {
-        console.error('Error declining invitation:', error);
-        alert('Error declining invitation: ' + error.message);
+        const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
+        const emailBody = `Dear ${formData.full_name},
+    
+    You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
+    
+    Your affiliation: ${formData.affiliation}
+    
+    Please use the following link to complete your registration:
+    ${signupLink}
+    
+    This invitation will remain valid for 30 days.
+    
+    Best regards,
+    ${userRole.full_name}`;
+    
+        setInvitationData({
+          email: formData.email,
+          subject: emailSubject,
+          body: emailBody,
+          link: signupLink
+        });
+        setShowInvitationPanel(true);
+        
+        await loadInvitations();
+        setShowInviteUserForm(false);
+      } catch (err) {
+        alert('Error creating invitation: ' + (err.message || err));
       }
-    }
-  };
+    };
 
-  const generateToken = () => {
-    return Math.random().toString(36).substring(2) + Date.now().toString(36);
-  };
-
-  const handleCreateInvitation = async (formData) => {
-    try {
-      const token = generateToken();
-      const signupLink = `${window.location.origin}?signup=${token}`;
-      
-      await addDoc(collection(db, 'invitations'), {
-        ...formData,
-        token,
-        invited_by_id: user.uid,
-        invited_by_name: userRole.full_name,
-        used: false,
-        expires_at: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
-        createdAt: serverTimestamp()
-      });
-
-      const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
-      const emailBody = `Dear ${formData.full_name},
-
-You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
-
-Your affiliation: ${formData.affiliation}
-
-Please use the following link to complete your registration:
-${signupLink}
-
-This invitation will remain valid for 30 days.
-
-Best regards,
-${userRole.full_name}`;
-
-      const mailtoLink = `mailto:${formData.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-      window.location.href = mailtoLink;
-
-      await loadInvitations();
-      setShowInviteUserForm(false);
-      alert('Invitation created! Your email client should open with a draft email.');
-    } catch (error) {
-      alert('Error creating invitation: ' + error.message);
-    }
-  };
-
+  /* ---------------------------
+     Users (edit/delete/reset)
+     --------------------------- */
   const handleEditUser = async (formData) => {
     try {
+      if (!editingUser) return;
       await updateDoc(doc(db, 'user_roles', editingUser.id), {
         full_name: formData.full_name,
         affiliation: formData.affiliation,
@@ -804,32 +822,28 @@ ${userRole.full_name}`;
       setShowEditUserForm(false);
       setEditingUser(null);
       alert('User updated successfully!');
-    } catch (error) {
-      alert('Error updating user: ' + error.message);
+    } catch (err) {
+      alert('Error updating user: ' + (err.message || err));
     }
   };
 
   const handleEditOwnProfile = async (formData) => {
     try {
-      // Update Firestore data
       await updateDoc(doc(db, 'user_roles', user.uid), {
         full_name: formData.full_name,
         affiliation: formData.affiliation
       });
-      
-      // Update local state
       setUserRole({
         ...userRole,
         full_name: formData.full_name,
         affiliation: formData.affiliation
       });
-      
       await loadAllUsers();
       await loadSeniorFellows();
       setShowEditProfileForm(false);
       alert('Profile updated successfully!');
-    } catch (error) {
-      alert('Error updating profile: ' + error.message);
+    } catch (err) {
+      alert('Error updating profile: ' + (err.message || err));
     }
   };
 
@@ -838,30 +852,50 @@ ${userRole.full_name}`;
       alert('You cannot delete your own account!');
       return;
     }
-
-    if (window.confirm(`Are you sure you want to remove ${userEmail} from the system?`)) {
-      try {
-        await deleteDoc(doc(db, 'user_roles', userId));
-        await loadAllUsers();
-        await loadSeniorFellows();
-        alert('User removed successfully!');
-      } catch (error) {
-        alert('Error removing user: ' + error.message);
-      }
+    if (!window.confirm(`Are you sure you want to remove ${userEmail} from the system?`)) return;
+    try {
+      await deleteDoc(doc(db, 'user_roles', userId));
+      await loadAllUsers();
+      await loadSeniorFellows();
+      alert('User removed successfully!');
+    } catch (err) {
+      alert('Error removing user: ' + (err.message || err));
     }
   };
 
-  const handlePasswordReset = async (email) => {
-    if (window.confirm(`Send password reset email to ${email}?`)) {
-      try {
-        await sendPasswordResetEmail(auth, email);
-        alert(`Password reset email sent to ${email}.`);
-      } catch (error) {
-        alert('Error sending password reset email: ' + error.message);
+  const handlePasswordReset = async (email, userName) => {
+    setPasswordResetUser({ email, userName });
+    setShowPasswordResetPanel(true);
+  };
+
+  /* ---------------------------
+     User availability
+     --------------------------- */
+  const handleUpdateAvailability = async (dateId, available) => {
+    try {
+      const existing = userAvailability.find(ua => ua.user_id === user.uid && ua.date_id === dateId);
+      if (existing) {
+        await updateDoc(doc(db, 'user_availability', existing.id), { available, updatedAt: serverTimestamp() });
+      } else {
+        if (!available) {
+          await addDoc(collection(db, 'user_availability'), {
+            user_id: user.uid,
+            user_name: userRole.full_name,
+            date_id: dateId,
+            available: false,
+            createdAt: serverTimestamp()
+          });
+        }
       }
+      await loadUserAvailability();
+    } catch (err) {
+      alert('Error updating availability: ' + (err.message || err));
     }
   };
 
+  /* ---------------------------
+     Agenda / Meetings
+     --------------------------- */
   const handleViewAgenda = (speaker) => {
     const agenda = agendas.find(a => a.speaker_id === speaker.id);
     if (agenda) {
@@ -881,109 +915,92 @@ ${userRole.full_name}`;
     try {
       const agenda = selectedAgenda;
       const meetings = [...(agenda.meetings || [])];
-      
       const meetingDate = new Date(meetingData.date);
-      const startTime = new Date(meetingDate);
-      const [startHours, startMinutes] = meetingData.start_time.split(':');
-      startTime.setHours(parseInt(startHours), parseInt(startMinutes), 0, 0);
-      
-      const endTime = new Date(meetingDate);
-      const [endHours, endMinutes] = meetingData.end_time.split(':');
-      endTime.setHours(parseInt(endHours), parseInt(endMinutes), 0, 0);
-
+      const start = new Date(meetingDate);
+      const [sh, sm] = meetingData.start_time.split(':');
+      start.setHours(parseInt(sh, 10), parseInt(sm, 10), 0, 0);
+      const end = new Date(meetingDate);
+      const [eh, em] = meetingData.end_time.split(':');
+      end.setHours(parseInt(eh, 10), parseInt(em, 10), 0, 0);
       const newMeeting = {
         title: meetingData.title,
         type: meetingData.type,
         date: Timestamp.fromDate(meetingDate),
-        start_time: Timestamp.fromDate(startTime),
-        end_time: Timestamp.fromDate(endTime),
+        start_time: Timestamp.fromDate(start),
+        end_time: Timestamp.fromDate(end),
         location: meetingData.location || '',
         attendees: meetingData.attendees ? meetingData.attendees.split(',').map(a => a.trim()) : [],
         notes: meetingData.notes || '',
         is_locked: false
       };
-
       meetings.push(newMeeting);
-
-      // Update immediately in local state for instant UI update
-      const updatedAgenda = {...agenda, meetings};
+      const updatedAgenda = { ...agenda, meetings };
       setSelectedAgenda(updatedAgenda);
       setShowAddMeetingForm(false);
       setSelectedTimeSlot(null);
-
-      // Then update Firebase in the background
       await updateDoc(doc(db, 'agendas', agenda.id), { meetings });
       await loadAgendas();
-    } catch (error) {
-      alert('Error adding meeting: ' + error.message);
-      // Reload to get correct state if there was an error
+    } catch (err) {
+      alert('Error adding meeting: ' + (err.message || err));
       await loadAgendas();
-      const originalAgenda = agendas.find(a => a.id === selectedAgenda.id);
-      if (originalAgenda) {
-        setSelectedAgenda(originalAgenda);
-      }
+      const original = agendas.find(a => a.id === selectedAgenda?.id);
+      if (original) setSelectedAgenda(original);
     }
   };
 
   const handleDeleteMeeting = async (meetingIndex) => {
-    if (window.confirm('Are you sure you want to delete this meeting?')) {
-      try {
-        const agenda = selectedAgenda;
-        const meetings = [...(agenda.meetings || [])];
-        
-        if (meetings[meetingIndex].is_locked) {
-          alert('Cannot delete the main seminar presentation.');
-          return;
-        }
-        
-        meetings.splice(meetingIndex, 1);
-        
-        // Update immediately in local state for instant UI update
-        const updatedAgenda = {...agenda, meetings};
-        setSelectedAgenda(updatedAgenda);
-        
-        // Then update Firebase in the background
-        await updateDoc(doc(db, 'agendas', agenda.id), { meetings });
-        await loadAgendas();
-      } catch (error) {
-        alert('Error deleting meeting: ' + error.message);
-        // Reload to get correct state if there was an error
-        await loadAgendas();
-        const originalAgenda = agendas.find(a => a.id === selectedAgenda.id);
-        if (originalAgenda) {
-          setSelectedAgenda(originalAgenda);
-        }
+    if (!window.confirm('Are you sure you want to delete this meeting?')) return;
+    try {
+      const agenda = selectedAgenda;
+      const meetings = [...(agenda.meetings || [])];
+      if (meetings[meetingIndex].is_locked) {
+        alert('Cannot delete the main seminar presentation.');
+        return;
       }
+      meetings.splice(meetingIndex, 1);
+      const updatedAgenda = { ...agenda, meetings };
+      setSelectedAgenda(updatedAgenda);
+      await updateDoc(doc(db, 'agendas', agenda.id), { meetings });
+      await loadAgendas();
+    } catch (err) {
+      alert('Error deleting meeting: ' + (err.message || err));
+      await loadAgendas();
+      const original = agendas.find(a => a.id === selectedAgenda?.id);
+      if (original) setSelectedAgenda(original);
     }
   };
 
+  /* ---------------------------
+     Small UX helpers
+     --------------------------- */
   const getRankingColor = (ranking) => {
     switch (ranking) {
-      case 'High Priority': return '#ff4444';
-      case 'Medium Priority': return '#ffaa00';
-      case 'Low Priority': return '#44ff44';
-      default: return '#999';
+      case 'High Priority': return 'bg-red-400';
+      case 'Medium Priority': return 'bg-yellow-400';
+      case 'Low Priority': return 'bg-green-400';
+      default: return 'bg-gray-300';
     }
   };
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'Proposed': return '#999';
-      case 'Invited': return '#0088ff';
-      case 'Accepted': return '#00cc00';
-      case 'Declined': return '#ff4444';
-      default: return '#999';
+      case 'Proposed': return 'text-gray-500';
+      case 'Invited': return 'text-sky-600';
+      case 'Accepted': return 'text-emerald-600';
+      case 'Declined': return 'text-red-500';
+      default: return 'text-gray-500';
     }
   };
 
-  const formatDate = (timestamp) => {
-    if (!timestamp) return 'N/A';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
-
+  /* ---------------------------
+     Loading states & route fallbacks
+     --------------------------- */
   if ((loading || loadingSignup) && !signupInvitation) {
-    return <div style={styles.loading}>Loading...</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+        <div className="text-center text-neutral-600">Loading...</div>
+      </div>
+    );
   }
 
   if (signupInvitation && !user) {
@@ -991,13 +1008,17 @@ ${userRole.full_name}`;
   }
 
   if (speakerAccess) {
-    return <SpeakerAccessView 
-      speaker={speakerAccess}
-      availableDates={availableDates}
-      onAccept={handleSpeakerAccept}
-      onDecline={handleSpeakerDecline}
-      formatDate={formatDate}
-    />;
+    return (
+      <SpeakerAccessView
+        speaker={speakerAccess}
+        availableDates={availableDates}
+        userAvailability={userAvailability}
+        pastSpeakers={speakers.filter(s => s.status === 'Accepted')}
+        onAccept={handleSpeakerAccept}
+        onDecline={handleSpeakerDecline}
+        formatDate={formatDate}
+      />
+    );
   }
 
   if (!user) {
@@ -1005,102 +1026,93 @@ ${userRole.full_name}`;
   }
 
   if (user && !userRole) {
-    return <div style={styles.loading}>Loading user data...</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+        <div className="text-neutral-600">Loading user data...</div>
+      </div>
+    );
   }
 
+  /* ============================================================
+     Main layout
+     ============================================================ */
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>Seminar Management System</h1>
-        <div style={styles.userInfo}>
-          <span style={styles.userName}>{userRole?.full_name} ({userRole?.role})</span>
-          <button onClick={handleLogout} style={styles.logoutBtn}>Logout</button>
+    <div className="min-h-screen bg-neutral-50 text-neutral-800">
+      {/* Header */}
+      <header className="bg-primary-dark text-white px-6 py-4 flex items-center justify-between shadow">
+        <div className="flex items-center gap-4">
+          <h1 className="text-xl font-semibold">Seminar Management System</h1>
+          <span className="text-sm text-neutral-200">Collaboratorium Barcelona</span>
         </div>
-      </div>
+        <div className="flex items-center gap-3">
+          <div className="text-sm">
+            {userRole?.full_name} <span className="text-neutral-300">({userRole?.role})</span>
+          </div>
+          <button onClick={handleLogout} className="px-3 py-1 border border-neutral-200 rounded hover:bg-neutral-100 text-sm">Logout</button>
+        </div>
+      </header>
 
-      <div style={styles.nav}>
-        <button 
-          onClick={() => setActiveTab('dashboard')} 
-          style={{...styles.navBtn, ...(activeTab === 'dashboard' ? styles.navBtnActive : {})}}>
-          Dashboard
-        </button>
-        <button 
-          onClick={() => setActiveTab('statistics')} 
-          style={{...styles.navBtn, ...(activeTab === 'statistics' ? styles.navBtnActive : {})}}>
-          Past Speakers
-        </button>
-        {userRole?.role === 'Organizer' && (
-          <>
-            <button 
-              onClick={() => setActiveTab('dates')} 
-              style={{...styles.navBtn, ...(activeTab === 'dates' ? styles.navBtnActive : {})}}>
-              Available Dates
-            </button>
-            <button 
-              onClick={() => setActiveTab('propose')} 
-              style={{...styles.navBtn, ...(activeTab === 'propose' ? styles.navBtnActive : {})}}>
-              Propose Speaker
-            </button>
-            <button 
-              onClick={() => setActiveTab('users')} 
-              style={{...styles.navBtn, ...(activeTab === 'users' ? styles.navBtnActive : {})}}>
-              Manage Users
-            </button>
-            <button 
-              onClick={() => setActiveTab('invitations')} 
-              style={{...styles.navBtn, ...(activeTab === 'invitations' ? styles.navBtnActive : {})}}>
-              User Invitations
-            </button>
-          </>
-        )}
-        {userRole?.role === 'Senior Fellow' && (
-          <button 
-            onClick={() => setActiveTab('propose')} 
-            style={{...styles.navBtn, ...(activeTab === 'propose' ? styles.navBtnActive : {})}}>
-            Propose Speaker
-          </button>
-        )}
-        <button 
-          onClick={() => setActiveTab('profile')} 
-          style={{...styles.navBtn, ...(activeTab === 'profile' ? styles.navBtnActive : {})}}>
-          My Profile
-        </button>
-      </div>
+      {/* Main container with max-width */}
+      <div className="flex max-w-[1600px] mx-auto">
+        {/* Left nav - REDUCED */}
+        <nav className="w-56 bg-white border-r p-4 space-y-2">
+          <NavButton label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+          <NavButton label="Past Speakers" active={activeTab === 'statistics'} onClick={() => setActiveTab('statistics')} />
+          {(userRole?.role === 'Fellow' || userRole?.role === 'Senior Fellow' || userRole?.role === 'Organizer') && (
+            <NavButton label="My Availability" active={activeTab === 'availability'} onClick={() => setActiveTab('availability')} />
+          )}
+          {userRole?.role === 'Organizer' && (
+            <>
+              <NavButton label="Available Dates" active={activeTab === 'dates'} onClick={() => setActiveTab('dates')} />
+              <NavButton label="Propose Speaker" active={activeTab === 'propose'} onClick={() => setActiveTab('propose')} />
+              <NavButton label="Manage Users" active={activeTab === 'users'} onClick={() => setActiveTab('users')} />
+              <NavButton label="User Invitations" active={activeTab === 'invitations'} onClick={() => setActiveTab('invitations')} />
+            </>
+          )}
+          {userRole?.role === 'Senior Fellow' && (
+            <NavButton label="Propose Speaker" active={activeTab === 'propose'} onClick={() => setActiveTab('propose')} />
+          )}
+          <NavButton label="My Profile" active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} />
+        </nav>
 
-      <div style={styles.mainContent}>
-        <div style={styles.content}>
+        {/* Main content - with flex-1 but constrained by parent max-width */}
+        <main className="flex-1 p-6 space-y-6 overflow-x-hidden">
           {activeTab === 'dashboard' && (
-            <DashboardView 
+            <DashboardView
               userRole={userRole}
               speakers={speakers}
               availableDates={availableDates}
+              upcomingLunchReminders={upcomingLunchReminders}
               onAcceptSpeaker={handleAcceptSpeaker}
               onRejectSpeaker={handleRejectSpeaker}
               onResendInvitation={handleResendInvitation}
-              onEditSpeaker={(speaker) => {
-                setEditingSpeaker(speaker);
-                setShowEditSpeakerForm(true);
-              }}
-              onEditConfirmed={(speaker) => {
-                setEditingSpeaker(speaker);
-                setShowEditConfirmedForm(true);
-              }}
-              onViewActions={(speaker) => {
-                setSidebarSpeaker(speaker);
-                setShowSidebar(true);
-              }}
+              onEditSpeaker={(s) => { setEditingSpeaker(s); setShowEditSpeakerForm(true); }}
+              onEditConfirmed={(s) => { setEditingSpeaker(s); setShowEditConfirmedForm(true); }}
+              onViewActions={(s) => { setSidebarSpeaker(s); setShowSidebar(true); }}
               onViewAgenda={handleViewAgenda}
               onGeneratePoster={handleGeneratePoster}
               onDeleteInvited={handleDeleteInvitedSpeaker}
+              onVoteSpeaker={handleVoteSpeaker}
+              currentUser={userRole}
               getRankingColor={getRankingColor}
               getStatusColor={getStatusColor}
               formatDate={formatDate}
             />
           )}
 
+          {activeTab === 'availability' && (userRole?.role === 'Fellow' || userRole?.role === 'Organizer') && (
+            <AvailabilityView
+              dates={availableDates.filter(d => d.locked_by_id !== 'DELETED')}
+              userAvailability={userAvailability}
+              currentUser={userRole}
+              onUpdateAvailability={handleUpdateAvailability}
+              formatDate={formatDate}
+            />
+          )}
+
           {activeTab === 'statistics' && (
-            <StatisticsView 
-              speakers={speakers} 
+            <StatisticsView
+              speakers={speakers}
               formatDate={formatDate}
               onAddPastSpeaker={() => setShowAddPastSpeakerForm(true)}
               isOrganizer={userRole?.role === 'Organizer'}
@@ -1108,7 +1120,7 @@ ${userRole.full_name}`;
           )}
 
           {activeTab === 'dates' && userRole?.role === 'Organizer' && (
-            <DatesView 
+            <DatesView
               dates={availableDates.filter(d => d.locked_by_id !== 'DELETED')}
               speakers={speakers}
               onAddDate={() => setShowAddDateForm(true)}
@@ -1118,13 +1130,10 @@ ${userRole.full_name}`;
           )}
 
           {activeTab === 'users' && userRole?.role === 'Organizer' && (
-            <ManageUsersView 
+            <ManageUsersView
               users={allUsers}
               currentUserId={user.uid}
-              onEditUser={(user) => {
-                setEditingUser(user);
-                setShowEditUserForm(true);
-              }}
+              onEditUser={(u) => { setEditingUser(u); setShowEditUserForm(true); }}
               onDeleteUser={handleDeleteUser}
               onPasswordReset={handlePasswordReset}
               formatDate={formatDate}
@@ -1132,7 +1141,7 @@ ${userRole.full_name}`;
           )}
 
           {activeTab === 'invitations' && userRole?.role === 'Organizer' && (
-            <InvitationsView 
+            <InvitationsView
               invitations={invitations}
               onCreateInvitation={() => setShowInviteUserForm(true)}
               formatDate={formatDate}
@@ -1140,13 +1149,10 @@ ${userRole.full_name}`;
           )}
 
           {activeTab === 'propose' && (
-            <ProposeSpeakerView 
+            <ProposeSpeakerView
               onAddSpeaker={() => setShowAddSpeakerForm(true)}
-              speakers={speakers.filter(s => s.proposed_by_id === user.uid)}
-              onEditSpeaker={(speaker) => {
-                setEditingSpeaker(speaker);
-                setShowEditSpeakerForm(true);
-              }}
+              speakers={speakers.filter(s => s.proposed_by_id === user.uid && s.status !== 'Accepted')}
+              onEditSpeaker={(s) => { setEditingSpeaker(s); setShowEditSpeakerForm(true); }}
               onDeleteSpeaker={handleDeleteSpeaker}
               getRankingColor={getRankingColor}
               getStatusColor={getStatusColor}
@@ -1155,2436 +1161,1267 @@ ${userRole.full_name}`;
           )}
 
           {activeTab === 'profile' && (
-            <ProfileView 
-              userRole={userRole}
-              onEditProfile={() => setShowEditProfileForm(true)}
+            <ProfileView userRole={userRole} onEditProfile={() => setShowEditProfileForm(true)} />
+          )}
+        </main>
+
+        {/* Right panel - with full height */}
+        <aside className="w-80 border-l bg-white p-4 min-h-screen">
+          {showSidebar && sidebarSpeaker && (
+            <ActionsSidebar
+              speaker={sidebarSpeaker}
+              onClose={() => { setShowSidebar(false); setSidebarSpeaker(null); }}
+              onUpdateAction={handleUpdateAction}
+              onAddAction={handleAddManualAction}
+              currentUser={userRole}
+              formatDate={formatDate}
             />
           )}
-        </div>
 
-        {showSidebar && sidebarSpeaker && (
-          <ActionsSidebar
-            speaker={sidebarSpeaker}
-            onClose={() => {
-              setShowSidebar(false);
-              setSidebarSpeaker(null);
-            }}
-            onUpdateAction={handleUpdateAction}
-            onAddAction={handleAddManualAction}
-            currentUser={userRole}
-            formatDate={formatDate}
-          />
-        )}
-
-        {showAgendaSidebar && selectedAgenda && (
-          <AgendaSidebar
-            agenda={selectedAgenda}
-            onClose={() => {
-              setShowAgendaSidebar(false);
-              setSelectedAgenda(null);
-              setShowAddMeetingForm(false);
-              setSelectedTimeSlot(null);
-            }}
-            onAddMeeting={() => setShowAddMeetingForm(true)}
-            onDeleteMeeting={handleDeleteMeeting}
-            showAddMeetingForm={showAddMeetingForm}
-            onSubmitMeeting={handleAddMeeting}
-            onCancelMeeting={() => {
-              setShowAddMeetingForm(false);
-              setSelectedTimeSlot(null);
-            }}
-            selectedTimeSlot={selectedTimeSlot}
-            onSelectTimeSlot={setSelectedTimeSlot}
-            formatDate={formatDate}
-            currentUser={userRole}
-          />
-        )}
-
-        {showPosterSidebar && posterSpeaker && (
-          <PosterSidebar
-            speaker={posterSpeaker}
-            onClose={() => {
-              setShowPosterSidebar(false);
-              setPosterSpeaker(null);
-            }}
-            formatDate={formatDate}
-            allUsers={allUsers}
-          />
-        )}
+          {showPosterSidebar && posterSpeaker && (
+            <PosterSidebar
+              speaker={posterSpeaker}
+              onClose={() => { setShowPosterSidebar(false); setPosterSpeaker(null); }}
+              formatDate={formatDate}
+              allUsers={allUsers}
+            />
+          )}
+        </aside>
       </div>
 
-      {showAddDateForm && (
-        <AddDateForm 
-          onSubmit={handleAddDate}
-          onCancel={() => setShowAddDateForm(false)}
-          existingDates={availableDates}
-          formatDate={formatDate}
-        />
-      )}
+      {/* Modals & Forms */}
+      {showAddDateForm && <AddDateForm onSubmit={handleAddDate} onCancel={() => setShowAddDateForm(false)} existingDates={availableDates} formatDate={formatDate} />}
 
-      {showAddSpeakerForm && (
-        <AddSpeakerForm 
-          onSubmit={handleAddSpeaker}
-          onCancel={() => setShowAddSpeakerForm(false)}
-          seniorFellows={seniorFellows}
-          currentUser={userRole}
-          countries={COUNTRIES}
-        />
-      )}
+      {showAddSpeakerForm && <AddSpeakerForm onSubmit={handleAddSpeaker} onCancel={() => setShowAddSpeakerForm(false)} seniorFellows={seniorFellows} currentUser={userRole} countries={COUNTRIES} />}
 
-      {showAddPastSpeakerForm && (
-        <AddPastSpeakerForm 
-          onSubmit={handleAddPastSpeaker}
-          onCancel={() => setShowAddPastSpeakerForm(false)}
-          seniorFellows={seniorFellows}
-          countries={COUNTRIES}
-        />
-      )}
+      {showAddPastSpeakerForm && <AddPastSpeakerForm onSubmit={handleAddPastSpeaker} onCancel={() => setShowAddPastSpeakerForm(false)} seniorFellows={seniorFellows} countries={COUNTRIES} />}
 
-      {showEditSpeakerForm && editingSpeaker && (
-        <EditSpeakerForm 
-          speaker={editingSpeaker}
-          onSubmit={handleEditSpeaker}
-          onCancel={() => {
-            setShowEditSpeakerForm(false);
-            setEditingSpeaker(null);
-          }}
-          seniorFellows={seniorFellows}
-          countries={COUNTRIES}
-        />
-      )}
+      {showEditSpeakerForm && editingSpeaker && <EditSpeakerForm speaker={editingSpeaker} onSubmit={handleEditSpeaker} onCancel={() => { setShowEditSpeakerForm(false); setEditingSpeaker(null); }} seniorFellows={seniorFellows} countries={COUNTRIES} />}
 
-      {showEditConfirmedForm && editingSpeaker && (
-        <EditConfirmedSpeakerForm 
-          speaker={editingSpeaker}
-          availableDates={availableDates}
-          onSubmit={handleEditConfirmedSpeaker}
-          onDelete={handleDeleteConfirmedSpeaker}
-          onCancel={() => {
-            setShowEditConfirmedForm(false);
-            setEditingSpeaker(null);
-          }}
-          formatDate={formatDate}
-        />
-      )}
+      {showEditConfirmedForm && editingSpeaker && <EditConfirmedSpeakerForm speaker={editingSpeaker} availableDates={availableDates} onSubmit={handleEditConfirmedSpeaker} onDelete={handleDeleteConfirmedSpeaker} onCancel={() => { setShowEditConfirmedForm(false); setEditingSpeaker(null); }} formatDate={formatDate} />}
 
-      {showInviteUserForm && (
-        <InviteUserForm 
-          onSubmit={handleCreateInvitation}
-          onCancel={() => setShowInviteUserForm(false)}
-        />
-      )}
+      {showInviteUserForm && <InviteUserForm onSubmit={handleCreateInvitation} onCancel={() => setShowInviteUserForm(false)} />}
 
-      {showEditUserForm && editingUser && (
-        <EditUserForm 
-          user={editingUser}
-          onSubmit={handleEditUser}
-          onCancel={() => {
-            setShowEditUserForm(false);
-            setEditingUser(null);
-          }}
-        />
-      )}
+      {showEditUserForm && editingUser && <EditUserForm user={editingUser} onSubmit={handleEditUser} onCancel={() => { setShowEditUserForm(false); setEditingUser(null); }} />}
 
-      {showEditProfileForm && (
-        <EditProfileForm 
-          userRole={userRole}
-          onSubmit={handleEditOwnProfile}
-          onCancel={() => setShowEditProfileForm(false)}
-        />
-      )}
-    </div>
-  );
-};
-
-// Add Date Form
-const AddDateForm = ({ onSubmit, onCancel, existingDates, formatDate }) => {
-  const [formData, setFormData] = useState({
-    date: '',
-    host: '',
-    notes: ''
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  const activeDates = existingDates.filter(d => d.locked_by_id !== 'DELETED');
-  const sortedDates = [...activeDates].sort((a, b) => {
-    const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-    const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-    return dateA - dateB;
-  });
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Add Available Date</h3>
-        
-        {activeDates.length > 0 && (
-          <div style={styles.existingDatesContainer}>
-            <h4 style={styles.existingDatesTitle}>Existing Dates:</h4>
-            <div style={styles.existingDatesList}>
-              {sortedDates.map(date => (
-                <div 
-                  key={date.id} 
-                  style={{
-                    ...styles.existingDateItem,
-                    backgroundColor: date.available ? '#d4edda' : '#cce5ff',
-                    borderLeft: `4px solid ${date.available ? '#28a745' : '#007bff'}`
-                  }}
-                >
-                  <div style={styles.existingDateInfo}>
-                    <strong>{formatDate(date.date)}</strong>
-                    <span style={styles.existingDateStatus}>
-                      {date.available ? '● Available' : '● Locked'}
-                    </span>
-                  </div>
-                  <div style={styles.existingDateDetails}>
-                    {date.talk_title && <span>"{date.talk_title}" - </span>}
-                    {date.host && `Host: ${date.host}`}
-                    {date.notes && ` (${date.notes})`}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Date: *</label>
-          <input
-            type="date"
-            value={formData.date}
-            onChange={(e) => setFormData({...formData, date: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Host (optional):</label>
-          <input
-            type="text"
-            value={formData.host}
-            onChange={(e) => setFormData({...formData, host: e.target.value})}
-            style={styles.input}
-            placeholder="Host name (can be set later)"
-          />
-
-          <label style={styles.label}>Notes:</label>
-          <input
-            type="text"
-            value={formData.notes}
-            onChange={(e) => setFormData({...formData, notes: e.target.value})}
-            style={styles.input}
-            placeholder="Room, time, etc."
-          />
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Add Date</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Add Speaker Form
-const AddSpeakerForm = ({ onSubmit, onCancel, seniorFellows, currentUser, countries }) => {
-  const [formData, setFormData] = useState({
-    full_name: '',
-    email: '',
-    affiliation: '',
-    country: '',
-    area_of_expertise: '',
-    ranking: 'Medium Priority',
-    notes: '',
-    host: currentUser?.full_name || ''
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Propose Speaker</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Full Name: *</label>
-          <input
-            type="text"
-            value={formData.full_name}
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Email: *</label>
-          <input
-            type="email"
-            value={formData.email}
-            onChange={(e) => setFormData({...formData, email: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Affiliation: *</label>
-          <input
-            type="text"
-            value={formData.affiliation}
-            onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
-            style={styles.input}
-            placeholder="Institution, University, etc."
-            required
-          />
-
-          <label style={styles.label}>Country of Affiliation: *</label>
-          <select
-            value={formData.country}
-            onChange={(e) => setFormData({...formData, country: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Country --</option>
-            {countries.map((country, idx) => {
-              if (country.startsWith('---')) {
-                return <option key={idx} disabled style={{fontWeight: 'bold', backgroundColor: '#f0f0f0'}}>{country}</option>;
-              }
-              return <option key={idx} value={country}>{country}</option>;
-            })}
-          </select>
-
-          <label style={styles.label}>Area of Expertise: *</label>
-          <input
-            type="text"
-            value={formData.area_of_expertise}
-            onChange={(e) => setFormData({...formData, area_of_expertise: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Priority Ranking:</label>
-          <select
-            value={formData.ranking}
-            onChange={(e) => setFormData({...formData, ranking: e.target.value})}
-            style={styles.select}
-          >
-            <option value="High Priority">High Priority</option>
-            <option value="Medium Priority">Medium Priority</option>
-            <option value="Low Priority">Low Priority</option>
-          </select>
-
-          <label style={styles.label}>Notes:</label>
-          <input
-            type="text"
-            value={formData.notes}
-            onChange={(e) => setFormData({...formData, notes: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Host: *</label>
-          <select
-            value={formData.host}
-            onChange={(e) => setFormData({...formData, host: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Host --</option>
-            {seniorFellows.map(fellow => (
-              <option key={fellow.id} value={fellow.full_name}>
-                {fellow.full_name} ({fellow.role})
-              </option>
-            ))}
-          </select>
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Propose Speaker</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Add Past Speaker Form
-const AddPastSpeakerForm = ({ onSubmit, onCancel, seniorFellows, countries }) => {
-  const [formData, setFormData] = useState({
-    full_name: '',
-    email: '',
-    affiliation: '',
-    country: '',
-    area_of_expertise: '',
-    host: '',
-    assigned_date: '',
-    talk_title: '',
-    talk_abstract: ''
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Add Past Speaker</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Full Name: *</label>
-          <input
-            type="text"
-            value={formData.full_name}
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Email:</label>
-          <input
-            type="email"
-            value={formData.email}
-            onChange={(e) => setFormData({...formData, email: e.target.value})}
-            style={styles.input}
-          />
-
-          <label style={styles.label}>Affiliation: *</label>
-          <input
-            type="text"
-            value={formData.affiliation}
-            onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
-            style={styles.input}
-            placeholder="Institution, University, etc."
-            required
-          />
-
-          <label style={styles.label}>Country of Affiliation: *</label>
-          <select
-            value={formData.country}
-            onChange={(e) => setFormData({...formData, country: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Country --</option>
-            {countries.map((country, idx) => {
-              if (country.startsWith('---')) {
-                return <option key={idx} disabled style={{fontWeight: 'bold', backgroundColor: '#f0f0f0'}}>{country}</option>;
-              }
-              return <option key={idx} value={country}>{country}</option>;
-            })}
-          </select>
-
-          <label style={styles.label}>Area of Expertise: *</label>
-          <input
-            type="text"
-            value={formData.area_of_expertise}
-            onChange={(e) => setFormData({...formData, area_of_expertise: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Host: *</label>
-          <select
-            value={formData.host}
-            onChange={(e) => setFormData({...formData, host: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Host --</option>
-            {seniorFellows.map(fellow => (
-              <option key={fellow.id} value={fellow.full_name}>
-                {fellow.full_name} ({fellow.role})
-              </option>
-            ))}
-          </select>
-
-          <label style={styles.label}>Seminar Date: *</label>
-          <input
-            type="date"
-            value={formData.assigned_date}
-            onChange={(e) => setFormData({...formData, assigned_date: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Talk Title:</label>
-          <input
-            type="text"
-            value={formData.talk_title}
-            onChange={(e) => setFormData({...formData, talk_title: e.target.value})}
-            style={styles.input}
-            placeholder="Enter talk title"
-          />
-
-          <label style={styles.label}>Talk Abstract:</label>
-          <textarea
-            value={formData.talk_abstract}
-            onChange={(e) => setFormData({...formData, talk_abstract: e.target.value})}
-            style={{...styles.input, minHeight: '100px', resize: 'vertical'}}
-            placeholder="Enter talk abstract"
-          />
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Add Past Speaker</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Edit Speaker Form
-const EditSpeakerForm = ({ speaker, onSubmit, onCancel, seniorFellows, countries }) => {
-  const [formData, setFormData] = useState({
-    full_name: speaker.full_name,
-    email: speaker.email,
-    affiliation: speaker.affiliation,
-    country: speaker.country || '',
-    area_of_expertise: speaker.area_of_expertise,
-    ranking: speaker.ranking,
-    host: speaker.host
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Edit Speaker</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Full Name:</label>
-          <input
-            type="text"
-            value={formData.full_name}
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Email:</label>
-          <input
-            type="email"
-            value={formData.email}
-            onChange={(e) => setFormData({...formData, email: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Affiliation:</label>
-          <input
-            type="text"
-            value={formData.affiliation}
-            onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Country of Affiliation:</label>
-          <select
-            value={formData.country}
-            onChange={(e) => setFormData({...formData, country: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Country --</option>
-            {countries.map((country, idx) => {
-              if (country.startsWith('---')) {
-                return <option key={idx} disabled style={{fontWeight: 'bold', backgroundColor: '#f0f0f0'}}>{country}</option>;
-              }
-              return <option key={idx} value={country}>{country}</option>;
-            })}
-          </select>
-
-          <label style={styles.label}>Area of Expertise:</label>
-          <input
-            type="text"
-            value={formData.area_of_expertise}
-            onChange={(e) => setFormData({...formData, area_of_expertise: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Priority Ranking:</label>
-          <select
-            value={formData.ranking}
-            onChange={(e) => setFormData({...formData, ranking: e.target.value})}
-            style={styles.select}
-          >
-            <option value="High Priority">High Priority</option>
-            <option value="Medium Priority">Medium Priority</option>
-            <option value="Low Priority">Low Priority</option>
-          </select>
-
-          <label style={styles.label}>Host:</label>
-          <select
-            value={formData.host}
-            onChange={(e) => setFormData({...formData, host: e.target.value})}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Host --</option>
-            {seniorFellows.map(fellow => (
-              <option key={fellow.id} value={fellow.full_name}>
-                {fellow.full_name} ({fellow.role})
-              </option>
-            ))}
-          </select>
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Save Changes</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Edit Confirmed Speaker Form
-const EditConfirmedSpeakerForm = ({ speaker, availableDates, onSubmit, onDelete, onCancel, formatDate }) => {
-  const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
-  
-  const [formData, setFormData] = useState({
-    talk_title: speaker.talk_title || '',
-    talk_abstract: speaker.talk_abstract || '',
-    host: speaker.host,
-    assigned_date: speaker.assigned_date ? 
-      (speaker.assigned_date.toDate ? speaker.assigned_date.toDate().toISOString().split('T')[0] : 
-       new Date(speaker.assigned_date).toISOString().split('T')[0]) : '',
-    current_date_id: currentLockedDate?.id || null,
-    new_date_id: currentLockedDate?.id || null,
-    old_date_id: currentLockedDate?.id || null
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  const selectableDates = availableDates.filter(d => 
-    (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED'
-  );
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Edit Confirmed Speaker</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Talk Title:</label>
-          <input
-            type="text"
-            value={formData.talk_title}
-            onChange={(e) => setFormData({...formData, talk_title: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Talk Abstract:</label>
-          <textarea
-            value={formData.talk_abstract}
-            onChange={(e) => setFormData({...formData, talk_abstract: e.target.value})}
-            style={{...styles.input, minHeight: '120px', resize: 'vertical'}}
-            placeholder="Enter talk abstract..."
-          />
-
-          <label style={styles.label}>Host:</label>
-          <input
-            type="text"
-            value={formData.host}
-            onChange={(e) => setFormData({...formData, host: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Assigned Date:</label>
-          <select
-            value={formData.new_date_id || ''}
-            onChange={(e) => {
-              const selectedDateId = e.target.value;
-              const selectedDate = availableDates.find(d => d.id === selectedDateId);
-              setFormData({
-                ...formData, 
-                new_date_id: selectedDateId,
-                assigned_date: selectedDate?.date ? 
-                  (selectedDate.date.toDate ? selectedDate.date.toDate().toISOString().split('T')[0] : 
-                   new Date(selectedDate.date).toISOString().split('T')[0]) : ''
-              });
-            }}
-            style={styles.select}
-            required
-          >
-            <option value="">-- Select Date --</option>
-            {selectableDates.map(date => (
-              <option key={date.id} value={date.id}>
-                {formatDate(date.date)} - {date.host} {date.notes ? `(${date.notes})` : ''} 
-                {date.id === currentLockedDate?.id ? ' (Current)' : ''}
-              </option>
-            ))}
-          </select>
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Save Changes</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-          
-          <div style={{marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e0e0e0'}}>
-            <button 
-              type="button" 
-              onClick={() => onDelete(speaker.id)}
-              style={{
-                ...styles.submitBtn, 
-                backgroundColor: '#e74c3c',
-                width: '100%'
-              }}>
-              Delete Speaker
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Invite User Form
-const InviteUserForm = ({ onSubmit, onCancel }) => {
-  const [formData, setFormData] = useState({
-    email: '',
-    full_name: '',
-    affiliation: '',
-    role: 'Senior Fellow'
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Create User Invitation</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Email:</label>
-          <input
-            type="email"
-            value={formData.email}
-            onChange={(e) => setFormData({...formData, email: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Full Name:</label>
-          <input
-            type="text"
-            value={formData.full_name}
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Affiliation:</label>
-          <input
-            type="text"
-            value={formData.affiliation}
-            onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
-            style={styles.input}
-            placeholder="Institution/University"
-            required
-          />
-
-          <label style={styles.label}>Role:</label>
-          <select
-            value={formData.role}
-            onChange={(e) => setFormData({...formData, role: e.target.value})}
-            style={styles.select}
-          >
-            <option value="Senior Fellow">Senior Fellow</option>
-            <option value="Organizer">Organizer</option>
-          </select>
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Create Invitation</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Edit User Form
-const EditUserForm = ({ user, onSubmit, onCancel }) => {
-  const [formData, setFormData] = useState({
-    full_name: user.full_name,
-    affiliation: user.affiliation || '',
-    role: user.role
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Edit User</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Email:</label>
-          <input
-            type="email"
-            value={user.email}
-            disabled
-            style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}
-          />
-
-          <label style={styles.label}>Full Name:</label>
-          <input
-            type="text"
-            value={formData.full_name}
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Affiliation:</label>
-          <input
-            type="text"
-            value={formData.affiliation}
-            onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
-            style={styles.input}
-            placeholder="Institution/University"
-            required
-          />
-
-          <label style={styles.label}>Role:</label>
-          <select
-            value={formData.role}
-            onChange={(e) => setFormData({...formData, role: e.target.value})}
-            style={styles.select}
-          >
-            <option value="Senior Fellow">Senior Fellow</option>
-            <option value="Organizer">Organizer</option>
-          </select>
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Save Changes</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Edit Profile Form (NEW)
-const EditProfileForm = ({ userRole, onSubmit, onCancel }) => {
-  const [formData, setFormData] = useState({
-    full_name: userRole.full_name,
-    affiliation: userRole.affiliation || ''
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.modal}>
-      <div style={styles.modalContent}>
-        <h3 style={styles.modalTitle}>Edit My Profile</h3>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>Email:</label>
-          <input
-            type="email"
-            value={userRole.email}
-            disabled
-            style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}
-          />
-
-          <label style={styles.label}>Full Name:</label>
-          <input
-            type="text"
-            value={formData.full_name}
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            style={styles.input}
-            required
-          />
-
-          <label style={styles.label}>Affiliation:</label>
-          <input
-            type="text"
-            value={formData.affiliation}
-            onChange={(e) => setFormData({...formData, affiliation: e.target.value})}
-            style={styles.input}
-            placeholder="Institution/University"
-            required
-          />
-
-          <label style={styles.label}>Role:</label>
-          <input
-            type="text"
-            value={userRole.role}
-            disabled
-            style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}
-          />
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={styles.submitBtn}>Save Changes</button>
-            <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Profile View Component (NEW)
-const ProfileView = ({ userRole, onEditProfile }) => {
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>My Profile</h2>
-        <button onClick={onEditProfile} style={styles.addBtn}>Edit Profile</button>
-      </div>
+      {showEditProfileForm && <EditProfileForm userRole={userRole} onSubmit={handleEditOwnProfile} onCancel={() => setShowEditProfileForm(false)} />}
       
-      <div style={styles.section}>
-        <div style={{display: 'grid', gap: '20px', maxWidth: '600px'}}>
-          <div>
-            <label style={{...styles.label, display: 'block', marginBottom: '8px'}}>Email:</label>
-            <div style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}>
-              {userRole.email}
-            </div>
-          </div>
-
-          <div>
-            <label style={{...styles.label, display: 'block', marginBottom: '8px'}}>Full Name:</label>
-            <div style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}>
-              {userRole.full_name}
-            </div>
-          </div>
-
-          <div>
-            <label style={{...styles.label, display: 'block', marginBottom: '8px'}}>Affiliation:</label>
-            <div style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}>
-              {userRole.affiliation || 'Not set'}
-            </div>
-          </div>
-
-          <div>
-            <label style={{...styles.label, display: 'block', marginBottom: '8px'}}>Role:</label>
-            <div style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}>
-              {userRole.role}
-            </div>
+      {/* Agenda Modal - ADD THIS */}
+      {showAgendaSidebar && selectedAgenda && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+            <AgendaSidebar
+              agenda={selectedAgenda}
+              onClose={() => { setShowAgendaSidebar(false); setSelectedAgenda(null); setShowAddMeetingForm(false); setSelectedTimeSlot(null); }}
+              onAddMeeting={() => setShowAddMeetingForm(true)}
+              onDeleteMeeting={handleDeleteMeeting}
+              showAddMeetingForm={showAddMeetingForm}
+              onSubmitMeeting={handleAddMeeting}
+              onCancelMeeting={() => { setShowAddMeetingForm(false); setSelectedTimeSlot(null); }}
+              selectedTimeSlot={selectedTimeSlot}
+              onSelectTimeSlot={setSelectedTimeSlot}
+              formatDate={formatDate}
+              currentUser={userRole}
+            />
           </div>
         </div>
-      </div>
-    </div>
-  );
-};
-
-// Agenda Sidebar with Calendar View
-const AgendaSidebar = ({ agenda, onClose, onAddMeeting, onDeleteMeeting, showAddMeetingForm, onSubmitMeeting, onCancelMeeting, selectedTimeSlot, onSelectTimeSlot, formatDate, currentUser }) => {
-  const formatTime = (timestamp) => {
-    if (!timestamp) return '';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-  };
-
-  const getMeetingTypeColor = (type) => {
-    switch(type) {
-      case 'seminar': return '#e74c3c';
-      case '1-to-1': return '#3498db';
-      case 'group': return '#9b59b6';
-      case 'social': return '#27ae60';
-      default: return '#95a5a6';
-    }
-  };
-
-  // Get the 3 days
-  const dayBefore = agenda.start_date.toDate ? agenda.start_date.toDate() : new Date(agenda.start_date);
-  const seminarDay = agenda.seminar_date.toDate ? agenda.seminar_date.toDate() : new Date(agenda.seminar_date);
-  const dayAfter = agenda.end_date.toDate ? agenda.end_date.toDate() : new Date(agenda.end_date);
-  
-  const days = [dayBefore, seminarDay, dayAfter];
-  
-  // Time slots from 8 AM to 8 PM
-  const timeSlots = [];
-  for (let hour = 8; hour <= 20; hour++) {
-    timeSlots.push(hour);
-  }
-
-  const getMeetingsForDayAndHour = (day, hour) => {
-    if (!agenda.meetings) return [];
-    
-    return agenda.meetings.filter(meeting => {
-      const meetingDate = meeting.date.toDate ? meeting.date.toDate() : new Date(meeting.date);
-      const meetingStart = meeting.start_time.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
-      
-      const isSameDay = meetingDate.toDateString() === day.toDateString();
-      const meetingHour = meetingStart.getHours();
-      
-      return isSameDay && meetingHour === hour;
-    });
-  };
-
-  const handleTimeSlotClick = (day, hour) => {
-    onSelectTimeSlot({ day, hour });
-    onAddMeeting();
-  };
-
-  return (
-    <div style={styles.agendaSidebar}>
-      <div style={styles.sidebarHeader}>
-        <div>
-          <h3 style={styles.sidebarTitle}>{agenda.speaker_name}</h3>
-          <p style={{margin: '4px 0', fontSize: '13px', color: '#666'}}>
-            {formatDate(agenda.start_date)} - {formatDate(agenda.end_date)}
-          </p>
-        </div>
-        <button onClick={onClose} style={styles.sidebarCloseBtn}>
-          <X size={20} />
-        </button>
-      </div>
-
-      <div style={styles.sidebarContent}>
-        {!showAddMeetingForm ? (
-          <>
-            <div style={styles.calendarContainer}>
-              <div style={styles.calendarDaysHeader}>
-                <div style={styles.calendarTimeColumn}></div>
-                {days.map((day, idx) => (
-                  <div key={idx} style={styles.calendarDayHeader}>
-                    <div style={styles.agendaCalendarDayName}>
-                      {idx === 0 && 'Day Before'}
-                      {idx === 1 && 'Seminar Day'}
-                      {idx === 2 && 'Day After'}
-                    </div>
-                    <div style={styles.calendarDayDate}>
-                      {day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div style={styles.agendaCalendarGrid}>
-                {timeSlots.map(hour => (
-                  <React.Fragment key={hour}>
-                    <div style={styles.timeSlotLabel}>
-                      {hour}:00
-                    </div>
-                    {days.map((day, dayIdx) => {
-                      const meetings = getMeetingsForDayAndHour(day, hour);
-                      return (
-                        <div
-                          key={`${dayIdx}-${hour}`}
-                          style={{
-                            ...styles.timeSlotCell,
-                            backgroundColor: meetings.length === 0 ? 'transparent' : '#f8f9fa',
-                          }}
-                          onClick={() => meetings.length === 0 && handleTimeSlotClick(day, hour)}
-                          onMouseEnter={(e) => meetings.length === 0 && (e.currentTarget.style.backgroundColor = '#e7f3ff')}
-                          onMouseLeave={(e) => meetings.length === 0 && (e.currentTarget.style.backgroundColor = 'transparent')}
-                        >
-                          {meetings.map((meeting, meetingIdx) => (
-                            <div
-                              key={meetingIdx}
-                              style={{
-                                ...styles.calendarMeeting,
-                                backgroundColor: getMeetingTypeColor(meeting.type),
-                              }}
-                            >
-                              <div style={styles.calendarMeetingTitle}>
-                                {meeting.title}
-                                {meeting.is_locked && ' 🔒'}
-                              </div>
-                              <div style={styles.calendarMeetingTime}>
-                                {formatTime(meeting.start_time)} - {formatTime(meeting.end_time)}
-                              </div>
-                              {!meeting.is_locked && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const meetingIndex = agenda.meetings.indexOf(meeting);
-                                    onDeleteMeeting(meetingIndex);
-                                  }}
-                                  style={styles.deleteMeetingBtn}
-                                >
-                                  ×
-                                </button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
-
-            <div style={styles.agendaInfo}>
-              <p style={{fontSize: '13px', color: '#666', marginBottom: '10px'}}>
-                💡 Click on any empty time slot to add a meeting
-              </p>
-              <button onClick={() => onAddMeeting()} style={styles.addActionBtn}>
-                + Add Meeting
-              </button>
-            </div>
-          </>
-        ) : (
-          <AddMeetingForm
-            onSubmit={onSubmitMeeting}
-            onCancel={onCancelMeeting}
-            agenda={agenda}
-            selectedTimeSlot={selectedTimeSlot}
-          />
-        )}
-      </div>
-    </div>
-  );
-};
-
-// Add Meeting Form
-const AddMeetingForm = ({ onSubmit, onCancel, agenda, selectedTimeSlot }) => {
-  const [formData, setFormData] = useState({
-    title: '',
-    type: '1-to-1',
-    date: selectedTimeSlot ? selectedTimeSlot.day.toISOString().split('T')[0] : '',
-    start_time: selectedTimeSlot ? `${selectedTimeSlot.hour.toString().padStart(2, '0')}:00` : '09:00',
-    end_time: selectedTimeSlot ? `${(selectedTimeSlot.hour + 1).toString().padStart(2, '0')}:00` : '10:00',
-    location: '',
-    attendees: '',
-    notes: ''
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-  };
-
-  return (
-    <div style={styles.addMeetingFormContainer}>
-      <h4 style={styles.formTitle}>Add Meeting</h4>
-      <form onSubmit={handleSubmit} style={styles.form}>
-        <label style={styles.label}>Meeting Title: *</label>
-        <input
-          type="text"
-          value={formData.title}
-          onChange={(e) => setFormData({...formData, title: e.target.value})}
-          style={styles.input}
-          placeholder="e.g., Meeting with Dr. Smith"
-          required
-        />
-
-        <label style={styles.label}>Type: *</label>
-        <select
-          value={formData.type}
-          onChange={(e) => setFormData({...formData, type: e.target.value})}
-          style={styles.select}
-          required
-        >
-          <option value="1-to-1">1-to-1 Meeting</option>
-          <option value="group">Group Meeting</option>
-          <option value="social">Social Event</option>
-          <option value="seminar">Seminar</option>
-        </select>
-
-        <label style={styles.label}>Date: *</label>
-        <input
-          type="date"
-          value={formData.date}
-          onChange={(e) => setFormData({...formData, date: e.target.value})}
-          style={styles.input}
-          required
-        />
-
-        <label style={styles.label}>Start Time: *</label>
-        <input
-          type="time"
-          value={formData.start_time}
-          onChange={(e) => setFormData({...formData, start_time: e.target.value})}
-          style={styles.input}
-          required
-        />
-
-        <label style={styles.label}>End Time: *</label>
-        <input
-          type="time"
-          value={formData.end_time}
-          onChange={(e) => setFormData({...formData, end_time: e.target.value})}
-          style={styles.input}
-          required
-        />
-
-        <label style={styles.label}>Location:</label>
-        <input
-          type="text"
-          value={formData.location}
-          onChange={(e) => setFormData({...formData, location: e.target.value})}
-          style={styles.input}
-          placeholder="e.g., Office 301, Coffee Room"
-        />
-
-        <label style={styles.label}>Attendees (comma-separated):</label>
-        <input
-          type="text"
-          value={formData.attendees}
-          onChange={(e) => setFormData({...formData, attendees: e.target.value})}
-          style={styles.input}
-          placeholder="e.g., Dr. Smith, Dr. Jones"
-        />
-
-        <label style={styles.label}>Notes:</label>
-        <textarea
-          value={formData.notes}
-          onChange={(e) => setFormData({...formData, notes: e.target.value})}
-          style={{...styles.input, minHeight: '80px', resize: 'vertical'}}
-          placeholder="Additional notes about the meeting"
-        />
-
-        <div style={styles.buttonGroup}>
-          <button type="submit" style={styles.submitBtn}>Add Meeting</button>
-          <button type="button" onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
-        </div>
-      </form>
-    </div>
-  );
-};
-
-// Poster Sidebar Component
-const PosterSidebar = ({ speaker, onClose, formatDate, allUsers }) => {
-  const defaultVenue = "BARCELONA COLLABORATORIUM\nEdifici Fundació Pasqual Maragall,\n2nd Floor Carrer Wellington 30, 08005,\nBarcelona (Spain)";
-  
-  const [posterData, setPosterData] = useState({
-    speakerName: speaker.full_name,
-    speakerAffiliation: speaker.affiliation || '',
-    speakerCountry: speaker.country  || '',
-    talkTitle: speaker.talk_title || '',
-    hostName: speaker.host || '',
-    hostAffiliation: '',
-    dateTime: speaker.assigned_date ? 
-      `${formatDate(speaker.assigned_date)} at 10:00` : '',
-    venue: defaultVenue
-  });
-
-
-  useEffect(() => {
-    // Find host affiliation
-    const host = allUsers.find(u => u.full_name === speaker.host);
-    if (host && host.affiliation) {
-      setPosterData(prev => ({...prev, hostAffiliation: host.affiliation}));
-    }
-  }, [speaker.host, allUsers]);
-
-  const handleDownloadPDF = async () => {
-    try {
-      const posterElement = document.getElementById('poster-preview');
-      if (!posterElement) {
-        alert('Poster preview not found');
-        return;
-      }
-
-      const html2canvas = await import('html2canvas');
-      const canvas = await html2canvas.default(posterElement, {
-        scale: 2,
-        backgroundColor: null,
-        logging: false,
-        useCORS: true
-      });
-
-      canvas.toBlob((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `poster_${posterData.speakerName.replace(/\s+/g, '_')}.png`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      });
-    } catch (error) {
-      console.error('Error generating poster:', error);
-      alert('Error generating poster. Please try right-clicking on the preview and selecting "Save image as..."');
-    }
-  };
-
-//   const handleDownloadSVG = () => {
-//     try {
-//       const posterElement = document.getElementById('poster-preview');
-//       if (!posterElement) {
-//         alert('Poster preview not found');
-//         return;
-//       }
-
-//       // const clonedElement = posterElement.cloneNode(true);
-//       const styles = window.getComputedStyle(posterElement);
-      
-//       const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
-// <svg xmlns="http://www.w3.org/2000/svg" width="1123" height="794">
-//   <foreignObject width="100%" height="100%">
-//     <div xmlns="http://www.w3.org/1999/xhtml" style="${Array.from(styles).map(key => `${key}:${styles.getPropertyValue(key)}`).join(';')}">
-//       ${posterElement.innerHTML}
-//     </div>
-//   </foreignObject>
-// </svg>`;
-
-//       const blob = new Blob([svgContent], { type: 'image/svg+xml' });
-//       const url = URL.createObjectURL(blob);
-//       const link = document.createElement('a');
-//       link.href = url;
-//       link.download = `poster_${posterData.speakerName.replace(/\s+/g, '_')}.svg`;
-//       document.body.appendChild(link);
-//       link.click();
-//       document.body.removeChild(link);
-//       URL.revokeObjectURL(url);
-//     } catch (error) {
-//       console.error('Error generating SVG:', error);
-//       alert('Error generating SVG. Please try the PNG download instead.');
-//     }
-//   };
-
-  return (
-    <div style={styles.posterSidebar}>
-      <div style={styles.posterSidebarContent}>
-        <div style={styles.posterSidebarHeader}>
-          <h3 style={styles.posterSidebarTitle}>Generate Poster</h3>
-          <button onClick={onClose} style={styles.sidebarCloseBtn}>
-            <X size={24} />
-          </button>
-        </div>
-
-        <div style={styles.posterFormAndPreview}>
-          <div style={styles.posterForm}>
-            <h4 style={styles.formSectionTitle}>Poster Information</h4>
-
-            <label style={styles.label}>Talk Title:</label>
-            <textarea
-              value={posterData.talkTitle}
-              onChange={(e) => setPosterData({...posterData, talkTitle: e.target.value})}
-              style={{...styles.input, minHeight: '80px', resize: 'vertical'}}
-            />
-
-            <label style={styles.label}>Speaker Name:</label>
-            <input
-              type="text"
-              value={posterData.speakerName}
-              onChange={(e) => setPosterData({...posterData, speakerName: e.target.value})}
-              style={styles.input}
-            />
-
-            <label style={styles.label}>Speaker Affiliation:</label>
-            <input
-              type="text"
-              value={posterData.speakerAffiliation}
-              onChange={(e) => setPosterData({...posterData, speakerAffiliation: e.target.value})}
-              style={styles.input}
-            />
-
-            <label style={styles.label}>Country:</label>
-            <input
-              type="text"
-              value={posterData.speakerCountry}
-              onChange={(e) => setPosterData({...posterData, speakerCountry: e.target.value})}
-              style={styles.input}
-            />
-
-            <label style={styles.label}>Host Name:</label>
-            <input
-              type="text"
-              value={posterData.hostName}
-              onChange={(e) => setPosterData({...posterData, hostName: e.target.value})}
-              style={styles.input}
-            />
-
-            <label style={styles.label}>Host Affiliation:</label>
-            <input
-              type="text"
-              value={posterData.hostAffiliation}
-              onChange={(e) => setPosterData({...posterData, hostAffiliation: e.target.value})}
-              style={styles.input}
-            />
-
-
-            <label style={styles.label}>Date & Time:</label>
-            <input
-              type="text"
-              value={posterData.dateTime}
-              onChange={(e) => setPosterData({...posterData, dateTime: e.target.value})}
-              style={styles.input}
-            />
-
-            <label style={styles.label}>Venue:</label>
-            <textarea
-              value={posterData.venue}
-              onChange={(e) => setPosterData({...posterData, venue: e.target.value})}
-              style={{...styles.input, minHeight: '100px', resize: 'vertical'}}
-            />
-
-            <div style={{marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px'}}>
+      )}
+      {/* Password Reset Panel */}
+      {showPasswordResetPanel && passwordResetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden">
+            <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
+              <h3 className="text-xl font-semibold">Password Reset Instructions</h3>
               <button 
-                onClick={handleDownloadPDF}
-                style={{...styles.submitBtn, backgroundColor: '#00bcd4'}}
+                onClick={() => {
+                  setShowPasswordResetPanel(false);
+                  setPasswordResetUser(null);
+                }}
+                className="text-white hover:text-neutral-200"
               >
-                📥 Download Poster (PNG)
+                <X size={24} />
               </button>
-              {/* <button 
-                onClick={handleDownloadSVG}
-                style={{...styles.submitBtn, backgroundColor: '#9b59b6'}}
-              >
-                📥 Download Poster (SVG)
-              </button> */}
             </div>
-          </div>
-
-          <div style={styles.posterPreviewContainer}>
-            <h4 style={styles.formSectionTitle}>Preview</h4>
-            <div id="poster-preview" style={styles.posterPreview}>
-              <div style={styles.posterHeader}>
-                <div style={styles.posterLogosTop}>
-                  <div style={styles.posterLogoItem}>
-                    <span style={styles.logoText}>EMBL</span>
-                  </div>
-                  <div style={styles.posterLogoItem}>
-                    <span style={styles.logoText}>CRG</span>
-                  </div>
+            <div className="p-6">
+              <div className="bg-neutral-50 rounded-lg p-4 mb-4">
+                <p className="text-sm text-neutral-600 mb-2">
+                  <strong>To:</strong> {passwordResetUser.email}
+                </p>
+                <p className="text-sm text-neutral-600 mb-4">
+                  <strong>Subject:</strong> Password Reset - Barcelona Collaboratorium
+                </p>
+                <div className="bg-white border rounded p-4 text-sm leading-relaxed">
+                  <p className="mb-3">Dear {passwordResetUser.userName},</p>
+                  <p className="mb-3">
+                    You have requested a password reset for your Barcelona Collaboratorium account.
+                  </p>
+                  <p className="mb-3">
+                    Please contact the system administrator at [admin email] to reset your password, 
+                    or visit the login page and use the "Forgot Password" link.
+                  </p>
+                  <p className="mb-3">
+                    If you did not request this reset, please ignore this message.
+                  </p>
+                  <p>
+                    Best regards,<br />
+                    Barcelona Collaboratorium Team
+                  </p>
                 </div>
               </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={async () => {
+                    const text = `Dear ${passwordResetUser.userName},
 
-              <div style={styles.posterTitleBanner}>
-                <div style={styles.posterBannerText}>BARCELONA COLLABORATORIUM</div>
-                <div style={styles.posterBannerText}>SEMINAR SERIES</div>
-              </div>
+You have requested a password reset for your Barcelona Collaboratorium account.
 
-              <div style={styles.posterContentGrid}>
-                <div style={styles.posterLeftColumn}>
-                  <div style={styles.posterInfoBlock}>
-                    <div style={styles.posterLabelPink}>HOST:</div>
-                    <div style={styles.posterContentText}>
-                      {posterData.hostName}
-                      {posterData.hostAffiliation}
-                    </div>
-                  </div>
+Please contact the system administrator to reset your password, or visit the login page and use the "Forgot Password" link.
 
-                  <div style={styles.posterInfoBlock}>
-                    <div style={styles.posterLabelPink}>VENUE:</div>
-                    <div style={styles.posterContentText}>
-                      {posterData.venue.split('\n').map((line, i) => (
-                        <div key={i}>{line}</div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div style={styles.posterInfoBlock}>
-                    <div style={styles.posterLabelPink}>MORE INFO AND REGISTRATION:</div>
-                    <div style={styles.posterQRCode}>
-                      QR code (resized)
-                    </div>
-                  </div>
-                </div>
-
-                <div style={styles.posterRightColumn}>
-                  <div style={styles.posterInfoBlock}>
-                    <div style={styles.posterLabelPink}>SPEAKER:</div>
-                    <div style={styles.posterSpeakerNameLarge}>{posterData.speakerName},</div>
-                    <div style={styles.posterContentText}>{posterData.speakerAffiliation}</div>
-                    {posterData.speakerAffiliation && (
-                      <div style={styles.posterAffiliationSmall}>
-                        ({posterData.speakerCountry.split(',').pop().trim()})
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={styles.posterInfoBlock}>
-                    <div style={styles.posterLabelPink}>TITLE:</div>
-                    <div style={styles.posterTitleItalic}>"{posterData.talkTitle}"</div>
-                  </div>
-
-                  <div style={styles.posterInfoBlock}>
-                    <div style={styles.posterLabelPink}>DATE & TIME:</div>
-                    <div style={styles.posterContentText}>{posterData.dateTime}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div style={styles.posterFooter}>
-                <div style={styles.posterFooterSupported}>Supported by:</div>
-                <div style={styles.posterFooterLogos}>
-                  <span style={styles.footerLogoText}>Excelencia Severo Ochoa</span>
-                  <span style={styles.footerLogoText}>Gobierno de España - Ministerio</span>
-                  <span style={styles.footerLogoText}>Generalitat de Catalunya</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-          
-
-// Actions Sidebar Component
-const ActionsSidebar = ({ speaker, onClose, onUpdateAction, onAddAction, currentUser, formatDate }) => {
-  const [collapsedCards, setCollapsedCards] = useState(new Set());
-  
-  const inviteLink = `${window.location.origin}?token=${speaker.access_token}`;
-  const emailSubject = 'Invitation to Present at Collaboratorium Barcelona';
-  const emailBody = `Dear ${speaker.full_name},
-
-We are delighted to invite you to present a seminar at the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona.
-
-Your host will be ${speaker.host}.
-
-Please visit the following link to accept and choose your preferred date:
-${inviteLink}
-
-This invitation will remain valid for 7 days. If you have any questions, please don't hesitate to reach out.
+If you did not request this reset, please ignore this message.
 
 Best regards,
-${currentUser.full_name}`;
-
-  const actions = speaker.actions || [];
-  
-  // Toggle card collapse state
-  const toggleCard = (cardId) => {
-    setCollapsedCards(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(cardId)) {
-        newSet.delete(cardId);
-      } else {
-        newSet.add(cardId);
-      }
-      return newSet;
-    });
-  };
-  
-  const isCardCollapsed = (cardId) => collapsedCards.has(cardId);
-  
-  // Check if invitation is overdue
-  const isInvitationOverdue = () => {
-    if (speaker.status !== 'Invited' || !speaker.response_deadline) return false;
-    const deadline = speaker.response_deadline.toDate ? speaker.response_deadline.toDate() : new Date(speaker.response_deadline);
-    return deadline < new Date();
-  };
-  
-  const getActionIcon = (type) => {
-    switch(type) {
-      case 'invitation_drafted': return <Mail size={20} />;
-      case 'speaker_responded': return <CheckCircle size={20} />;
-      case 'travel_arrangements': return <Plane size={20} />;
-      default: return <CheckCircle size={20} />;
-    }
-  };
-
-  const getActionTitle = (type) => {
-    switch(type) {
-      case 'invitation_drafted': return 'Invitation Email';
-      case 'speaker_responded': return 'Speaker Response';
-      case 'travel_arrangements': return 'Travel Arrangements';
-      default: return 'Action';
-    }
-  };
-
-  const getActionContent = (action) => {
-    if (action.type === 'speaker_responded') {
-      return (
-        <div style={styles.actionCardContent}>
-          <p style={{margin: '8px 0', color: action.action === 'accepted' ? '#27ae60' : '#e74c3c', fontWeight: '600'}}>
-            Speaker {action.action === 'accepted' ? 'accepted' : 'declined'} the invitation
-          </p>
-        </div>
-      );
-    }
-    
-    if (action.type === 'travel_arrangements') {
-      const seminarDate = speaker.assigned_date ? formatDate(speaker.assigned_date) : '[seminar date]';
-      const travelEmailBody = `Dear ${speaker.full_name},
-
-I hope this email finds you well.
-We are delighted that you will be giving a seminar at the Barcelona Collaboratorium on ${seminarDate}.
-
-To start organizing your trip, could you please confirm your dates of stay in Barcelona? Once we have this information, we will send you an invitation to our TravelPerk platform, where you will book your flights and hotel. Please note that the TravelPerk invitation link expires in 24 hours, so it's best to complete the registration shortly after receiving it.
-
-Additionally, to announce your seminar internally and on our website, we would kindly ask you to send us a title and a brief abstract of your talk when convenient.
-
-We will schedule one-to-one meetings (30 minutes each) with you on Thursday after the seminar, for people who express interest.
-
-Don't hesitate to reach out if you have any questions regarding the logistics or your presentation.
-
-We look forward to welcoming you in Barcelona.
-
-Best regards,
-${currentUser.full_name}`;
-
-      return (
-        <div style={styles.actionCardContent}>
-          <p style={styles.emailLabel}>To: {speaker.email}</p>
-          <p style={styles.emailLabel}>Subject: Travel Arrangements - Barcelona Collaboratorium Seminar</p>
-          <div style={styles.emailBody}>
-            {travelEmailBody.split('\n').map((line, i) => (
-              <p key={i} style={{margin: '8px 0'}}>{line}</p>
-            ))}
-          </div>
-          <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
-            <button
-              onClick={() => {
-                const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent('Travel Arrangements - Barcelona Collaboratorium Seminar')}&body=${encodeURIComponent(travelEmailBody)}`;
-                window.location.href = mailtoLink;
-              }}
-              style={styles.sendEmailBtn}
-            >
-              <Send size={16} style={{marginRight: '6px'}} />
-              Open in Email Client
-            </button>
-            <button
-              onClick={async () => {
-                try {
-                  if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(travelEmailBody);
-                    alert('Message copied to clipboard!');
-                  } else {
-                    // Fallback for browsers without clipboard API
-                    const textArea = document.createElement('textarea');
-                    textArea.value = travelEmailBody;
-                    textArea.style.position = 'fixed';
-                    textArea.style.left = '-999999px';
-                    document.body.appendChild(textArea);
-                    textArea.select();
+Barcelona Collaboratorium Team`;
+                    
                     try {
-                      document.execCommand('copy');
+                      await navigator.clipboard.writeText(text);
                       alert('Message copied to clipboard!');
                     } catch (err) {
-                      alert('Failed to copy text. Please copy manually.');
+                      console.error('Copy failed:', err);
                     }
-                    document.body.removeChild(textArea);
-                  }
-                } catch (err) {
-                  console.error('Copy failed:', err);
-                  alert('Failed to copy text. Please copy manually.');
-                }
-              }}
-              style={{...styles.sendEmailBtn, backgroundColor: '#9b59b6'}}
-            >
-              📋 Copy Text
-            </button>
+                  }}
+                  className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
+                >
+                  📋 Copy Message
+                </button>
+                <button
+                  onClick={() => {
+                    const subject = 'Password Reset - Barcelona Collaboratorium';
+                    const body = `Dear ${passwordResetUser.userName},
+
+You have requested a password reset for your Barcelona Collaboratorium account.
+
+Please contact the system administrator to reset your password, or visit the login page and use the "Forgot Password" link.
+
+If you did not request this reset, please ignore this message.
+
+Best regards,
+Barcelona Collaboratorium Team`;
+                    window.location.href = `mailto:${passwordResetUser.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                  }}
+                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  📧 Open Email Client
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      );
-    }
+      )}
 
-    return null;
-  };
-
-  return (
-    <div style={styles.sidebar}>
-      <div style={styles.sidebarHeader}>
-        <h3 style={styles.sidebarTitle}>{speaker.full_name}</h3>
-        <button onClick={onClose} style={styles.sidebarCloseBtn}>
-          <X size={20} />
-        </button>
-      </div>
-
-      <div style={styles.sidebarContent}>
-        <div style={styles.sidebarSection}>
-          <p style={styles.sidebarText}><strong>Status:</strong> {speaker.status}</p>
-          <p style={styles.sidebarText}><strong>Email:</strong> {speaker.email}</p>
-          <p style={styles.sidebarText}><strong>Host:</strong> {speaker.host}</p>
-          {speaker.assigned_date && (
-            <p style={styles.sidebarText}><strong>Date:</strong> {formatDate(speaker.assigned_date)}</p>
-          )}
-        </div>
-
-        <div style={styles.sidebarSection}>
-          <h4 style={styles.sidebarSectionTitle}>Actions</h4>
-          
-          {isInvitationOverdue() && (
-            <div style={{...styles.actionCard, backgroundColor: '#fff3cd', borderLeft: '4px solid #ff9800'}}>
-              <div 
-                style={{...styles.actionCardHeader, cursor: 'pointer'}}
-                onClick={() => toggleCard('overdue')}
+      {/* Invitation Panel */}
+      {showInvitationPanel && invitationData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden">
+            <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
+              <h3 className="text-xl font-semibold">User Invitation</h3>
+              <button 
+                onClick={() => {
+                  setShowInvitationPanel(false);
+                  setInvitationData(null);
+                }}
+                className="text-white hover:text-neutral-200"
               >
-                <div style={{...styles.actionCardTitle, color: '#ff9800'}}>
-                  <Mail size={20} />
-                  <span style={{marginLeft: '8px'}}>⚠️ No Response from Speaker</span>
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="bg-neutral-50 rounded-lg p-4 mb-4">
+                <p className="text-sm text-neutral-600 mb-2">
+                  <strong>To:</strong> {invitationData.email}
+                </p>
+                <p className="text-sm text-neutral-600 mb-4">
+                  <strong>Subject:</strong> {invitationData.subject}
+                </p>
+                <div className="bg-white border rounded p-4 text-sm leading-relaxed whitespace-pre-wrap">
+                  {invitationData.body}
                 </div>
-                <span style={{fontSize: '18px', color: '#ff9800'}}>
-                  {isCardCollapsed('overdue') ? '▼' : '▲'}
-                </span>
               </div>
-              {!isCardCollapsed('overdue') && (
-                <div style={styles.actionCardContent}>
-                  <p style={{margin: '8px 0', fontSize: '13px', color: '#856404'}}>
-                    The speaker has not responded to the initial invitation sent on {formatDate(speaker.invitation_sent_date)}.
-                    The deadline was {formatDate(speaker.response_deadline)}.
-                  </p>
-                  <p style={{margin: '8px 0', fontSize: '13px', color: '#856404', fontWeight: '600'}}>
-                    Consider resending the invitation or following up directly.
-                  </p>
+              <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
+                <p className="text-xs text-blue-900 mb-2 font-semibold">Signup Link:</p>
+                <code className="text-xs bg-white px-2 py-1 rounded block break-all">{invitationData.link}</code>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(invitationData.body);
+                      alert('Message copied to clipboard!');
+                    } catch (err) {
+                      console.error('Copy failed:', err);
+                    }
+                  }}
+                  className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
+                >
+                  📋 Copy Message
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(invitationData.link);
+                      alert('Link copied to clipboard!');
+                    } catch (err) {
+                      console.error('Copy failed:', err);
+                    }
+                  }}
+                  className="flex-1 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+                >
+                  🔗 Copy Link
+                </button>
+                <button
+                  onClick={() => {
+                    window.location.href = `mailto:${invitationData.email}?subject=${encodeURIComponent(invitationData.subject)}&body=${encodeURIComponent(invitationData.body)}`;
+                  }}
+                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  📧 Open Email Client
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+/* ============================================================
+   Small subcomponents (Tailwind-styled)
+   These mirror the previous components but are cleaned.
+   For brevity some complex UIs are simplified but extensible.
+   ============================================================ */
+
+function NavButton({ label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-3 py-2 rounded ${active ? 'bg-primary text-white' : 'hover:bg-neutral-100'}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+
+/* ---------------------
+   InvitedList helper
+   --------------------- */
+   function InvitedList({ speakers, onResendInvitation, onDeleteInvited, onViewAgenda, formatDate, canEdit, currentUserRole }) {
+    if (!speakers || speakers.length === 0) return <p className="text-sm text-neutral-500">No pending invitations.</p>;
+    
+    return (
+      <div className="space-y-2">
+        {speakers.map(s => {
+          const deadline = s.response_deadline ? safeToDate(s.response_deadline) : null;
+          const isOverdue = deadline && deadline < new Date();
+          
+          return (
+            <div key={s.id} className={`border rounded p-3 flex justify-between items-start ${isOverdue ? 'border-red-300 bg-red-50' : ''}`}>
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="font-semibold">{s.full_name}</div>
+                  {isOverdue && (
+                    <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-semibold rounded">
+                      OVERDUE
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm text-neutral-600">{s.area_of_expertise} • {s.affiliation}</div>
+                <div className="text-xs text-neutral-500 mt-1">
+                  Invited: {formatDate(s.invitation_sent_date)} • Deadline: {formatDate(s.response_deadline)}
+                  {isOverdue && <span className="text-red-600 font-semibold ml-2">⚠ Response overdue!</span>}
+                  <br />Host: {s.host}
+                </div>
+              </div>
+              {(currentUserRole === 'Organizer' || canEdit(s)) && (
+                <div className="space-y-1">
+                  <button onClick={() => onResendInvitation(s)} className={`px-2 py-1 text-white text-xs rounded w-full ${isOverdue ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-500 hover:bg-emerald-600'}`}>
+                    {isOverdue ? 'Resend (Overdue)' : 'Resend'}
+                  </button>
+                  {currentUserRole === 'Organizer' && (
+                    <button onClick={() => onDeleteInvited(s.id)} className="px-2 py-1 bg-red-500 text-white text-xs rounded w-full hover:bg-red-600">Delete</button>
+                  )}
                 </div>
               )}
             </div>
-          )}
-          
-          {actions.map((action, index) => {
-            const cardId = `action-${index}`;
-            const isCollapsed = isCardCollapsed(cardId);
-            
-            return (
-              <div key={index} style={styles.actionCard}>
-                <div 
-                  style={{...styles.actionCardHeader, cursor: 'pointer'}}
-                  onClick={() => toggleCard(cardId)}
-                >
-                  <div style={styles.actionCardTitle}>
-                    {getActionIcon(action.type)}
-                    <span style={{marginLeft: '8px'}}>{getActionTitle(action.type)}</span>
-                  </div>
-                  <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
-                    <input
-                      type="checkbox"
-                      checked={action.completed}
-                      onChange={(e) => {
-                        e.stopPropagation();
-                        onUpdateAction(speaker.id, index, e.target.checked);
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      style={styles.checkbox}
-                    />
-                    <span style={{fontSize: '18px', color: '#666'}}>
-                      {isCollapsed ? '▼' : '▲'}
-                    </span>
-                  </div>
-                </div>
-                
-                {!isCollapsed && (
-                  <>
-                    {action.type === 'invitation_drafted' && (
-                      <div style={styles.actionCardContent}>
-                        <p style={styles.emailLabel}>To: {speaker.email}</p>
-                        <p style={styles.emailLabel}>Subject: {emailSubject}</p>
-                        <div style={styles.emailBody}>
-                          {emailBody.split('\n').map((line, i) => (
-                            <p key={i} style={{margin: '8px 0'}}>{line}</p>
-                          ))}
-                        </div>
-                        <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
-                          <button
-                            onClick={() => {
-                              const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-                              window.location.href = mailtoLink;
-                            }}
-                            style={styles.sendEmailBtn}
-                          >
-                            <Send size={16} style={{marginRight: '6px'}} />
-                            Open in Email Client
-                          </button>
-                          <button
-                            onClick={async () => {
-                              try {
-                                if (navigator.clipboard && navigator.clipboard.writeText) {
-                                  await navigator.clipboard.writeText(emailBody);
-                                  alert('Message copied to clipboard!');
-                                } else {
-                                  // Fallback for browsers without clipboard API
-                                  const textArea = document.createElement('textarea');
-                                  textArea.value = emailBody;
-                                  textArea.style.position = 'fixed';
-                                  textArea.style.left = '-999999px';
-                                  document.body.appendChild(textArea);
-                                  textArea.select();
-                                  try {
-                                    document.execCommand('copy');
-                                    alert('Message copied to clipboard!');
-                                  } catch (err) {
-                                    alert('Failed to copy text. Please copy manually.');
-                                  }
-                                  document.body.removeChild(textArea);
-                                }
-                              } catch (err) {
-                                console.error('Copy failed:', err);
-                                alert('Failed to copy text. Please copy manually.');
-                              }
-                            }}
-                            style={{...styles.sendEmailBtn, backgroundColor: '#9b59b6'}}
-                          >
-                            📋 Copy Text
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {getActionContent(action)}
-                    
-                    <p style={styles.actionTimestamp}>
-                      {action.user} - {new Date(action.timestamp).toLocaleString()}
-                    </p>
-                    {action.completed && action.completedAt && (
-                      <p style={styles.actionCompleted}>
-                        ✓ Completed on {new Date(action.completedAt).toLocaleString()}
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
+          );
+        })}
+      </div>
+    );
+  }
+  
+/* ---------------------
+   LoginView & SignupView
+   --------------------- */
+function LoginView({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-md">
+        <h2 className="text-xl font-semibold mb-4">Sign in</h2>
+        <input className="w-full border rounded px-3 py-2 mb-3" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+        <input type="password" className="w-full border rounded px-3 py-2 mb-3" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
+        <div className="flex justify-end">
+          <button onClick={() => onLogin(email, password)} className="px-4 py-2 bg-primary text-white rounded">Login</button>
         </div>
-
-        {speaker.status === 'Accepted' && !actions.some(a => a.type === 'travel_arrangements') && (
-          <button
-            onClick={() => onAddAction(speaker.id, 'travel_arrangements')}
-            style={styles.addActionBtn}
-          >
-            + Add Travel Arrangements Card
-          </button>
-        )}
       </div>
     </div>
   );
-};
+}
 
-const StatisticsView = ({ speakers, formatDate, onAddPastSpeaker, isOrganizer }) => {
-  const [selectedYear, setSelectedYear] = useState('all');
-  
-  const acceptedSpeakers = speakers.filter(s => s.status === 'Accepted');
-  
-  const getYearFromDate = (date) => {
-    if (!date) return null;
-    const d = date.toDate ? date.toDate() : new Date(date);
-    return d.getFullYear();
-  };
-
-  // Filter speakers by selected year
-  const filteredSpeakers = selectedYear === 'all' 
-    ? acceptedSpeakers 
-    : acceptedSpeakers.filter(s => getYearFromDate(s.assigned_date) === parseInt(selectedYear));
-
-  const speakersByYear = acceptedSpeakers.reduce((acc, s) => {
-    const year = getYearFromDate(s.assigned_date);
-    if (year) {
-      if (!acc[year]) acc[year] = [];
-      acc[year].push(s);
-    }
-    return acc;
-  }, {});
-
-  const availableYears = Object.keys(speakersByYear).sort();
-
-  const yearData = Object.keys(speakersByYear)
-    .sort()
-    .map(year => ({
-      year,
-      count: speakersByYear[year].length
-    }));
-
-  const countryData = filteredSpeakers.reduce((acc, s) => {
-    const country = s.country || 'Unknown';
-    acc[country] = (acc[country] || 0) + 1;
-    return acc;
-  }, {});
-
-  const topCountries = Object.entries(countryData)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([country, count]) => ({ country, count }));
-
-  const uniqueAffiliations = new Set(
-    filteredSpeakers
-      .map(s => s.affiliation)
-      .filter(a => a && a.trim())
+function SignupView({ invitation, onSignup }) {
+  const [password, setPassword] = useState('');
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-md">
+        <h2 className="text-xl font-semibold mb-4">Complete signup for {invitation.email}</h2>
+        <p className="text-sm text-neutral-600 mb-3">Invitation for: <strong>{invitation.full_name}</strong></p>
+        <input type="password" className="w-full border rounded px-3 py-2 mb-3" placeholder="Choose a password" value={password} onChange={e => setPassword(e.target.value)} />
+        <div className="flex justify-end">
+          <button onClick={() => onSignup(password)} className="px-4 py-2 bg-primary text-white rounded">Create account</button>
+        </div>
+      </div>
+    </div>
   );
-  const affiliationCount = uniqueAffiliations.size;
+}
 
-  const getRegion = (country) => {
-    if (!country) return 'Unknown';
-    if (country === 'Spain') return 'Spain';
+/* ---------------------
+   SpeakerAccessView (for token-accessed speakers) - REDESIGNED
+   --------------------- */
+   function SpeakerAccessView({ speaker, availableDates, userAvailability, pastSpeakers, onAccept, onDecline, formatDate }) {
+    const [selectedDateId, setSelectedDateId] = useState('');
+    const [talkTitle, setTalkTitle] = useState(speaker.talk_title || '(TBC)');
+    const [talkAbstract, setTalkAbstract] = useState(speaker.talk_abstract || '(TBC)');
+    const [showConfirmation, setShowConfirmation] = useState(false);
+    const [confirmationType, setConfirmationType] = useState('');
+    const [showStatistics, setShowStatistics] = useState(false);
     
-    const europeanCountries = ['Austria', 'Belgium', 'Denmark', 'France', 'Germany', 'Italy', 
-      'Netherlands', 'Switzerland', 'United Kingdom', 'Sweden', 'Norway', 'Bulgaria', 'Croatia', 
-      'Cyprus', 'Czech Republic', 'Estonia', 'Finland', 'Greece', 'Hungary', 'Ireland', 'Latvia', 
-      'Lithuania', 'Luxembourg', 'Malta', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia'];
-    if (europeanCountries.includes(country)) return 'Europe (excl. Spain)';
+    // Initialize to first available date's month
+    const getInitialMonth = () => {
+      const available = availableDates.filter(d => d.available && (!d.locked_by_id || d.locked_by_id === 'DELETED'));
+      if (available.length === 0) return new Date();
+      const firstDate = available[0].date?.toDate ? available[0].date.toDate() : new Date(available[0].date);
+      return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+    };
     
-    const northAmerica = ['United States', 'Canada', 'Mexico'];
-    if (northAmerica.includes(country)) return 'North America';
-    
-    const asia = ['China', 'Japan', 'India', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines'];
-    if (asia.includes(country)) return 'Asia';
-    
-    const oceania = ['Australia', 'New Zealand'];
-    if (oceania.includes(country)) return 'Oceania';
-    
-    return 'Other';
-  };
+    const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
 
-  const regionData = filteredSpeakers.reduce((acc, s) => {
-    const region = getRegion(s.country);
-    acc[region] = (acc[region] || 0) + 1;
-    return acc;
-  }, {});
-
-  const regionChartData = Object.entries(regionData).map(([region, count]) => ({
-    name: region,
-    value: count
-  }));
-
-  const COLORS = ['#d63447', '#3498db', '#e67e22', '#f1c40f', '#2ecc71', '#95a5a6'];
-
-  const handleExportCSV = () => {
-    const headers = ['Name', 'Affiliation', 'Country', 'Email', 'Date', 'Talk Title', 'Host', 'Area of Expertise'];
-    const rows = filteredSpeakers
-      .sort((a, b) => {
-        const dateA = a.assigned_date?.toDate ? a.assigned_date.toDate() : new Date(a.assigned_date);
-        const dateB = b.assigned_date?.toDate ? b.assigned_date.toDate() : new Date(b.assigned_date);
-        return dateB - dateA;
-      })
-      .map(speaker => [
-        speaker.full_name,
-        speaker.affiliation,
-        speaker.country || 'N/A',
-        speaker.email || 'N/A',
-        formatDate(speaker.assigned_date),
-        speaker.talk_title || 'N/A',
-        speaker.host || 'N/A',
-        speaker.area_of_expertise || 'N/A'
-      ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    const filename = selectedYear === 'all' 
-      ? `past_speakers_all_${new Date().toISOString().split('T')[0]}.csv`
-      : `past_speakers_${selectedYear}_${new Date().toISOString().split('T')[0]}.csv`;
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleExportPDF = async () => {
-    try {
-      const statisticsElement = document.getElementById('statistics-charts-only');
-      if (!statisticsElement) {
-        alert('Statistics content not found');
+    if (showConfirmation) {
+      return (
+        <div className="min-h-screen bg-neutral-50 flex items-center justify-center p-8">
+          <div className="w-full max-w-2xl bg-white rounded-lg shadow-lg p-8 text-center">
+            {confirmationType === 'accept' ? (
+              <>
+                <div className="text-6xl mb-4">✅</div>
+                <h2 className="text-3xl font-bold text-green-600 mb-4">Thank You!</h2>
+                <p className="text-lg text-neutral-700 mb-4">
+                  Thank you for accepting our invitation! We are delighted to have you join us.
+                </p>
+                <p className="text-neutral-600">
+                  We will contact you shortly about your travel and accommodation arrangements, 
+                  which are fully covered by the Barcelona Collaboratorium.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="text-6xl mb-4">🙏</div>
+                <h2 className="text-3xl font-bold text-neutral-700 mb-4">Thank You</h2>
+                <p className="text-lg text-neutral-700">
+                  Thank you for taking the time to consider our offer. 
+                  We appreciate your response and hope to have the opportunity to work together in the future.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+  
+    const getDaysInMonth = (date) => {
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const daysInMonth = lastDay.getDate();
+      const startingDayOfWeek = firstDay.getDay();
+      return { daysInMonth, startingDayOfWeek, year, month };
+    };
+  
+    const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth);
+  
+    const previousMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
+    };
+  
+    const nextMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
+    };
+  
+    const getDateInfo = (day) => {
+      const checkDate = new Date(year, month, day);
+      checkDate.setHours(0, 0, 0, 0);
+      
+      // Only show dates in the future
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (checkDate <= today) return null;
+      
+      const dateEntry = availableDates.find(d => {
+        // Must be available and not locked by anyone
+        if (!d.available || (d.locked_by_id && d.locked_by_id !== 'DELETED')) return false;
+        
+        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        entryDate.setHours(0, 0, 0, 0);
+        return entryDate.getTime() === checkDate.getTime();
+      });
+  
+      return dateEntry;
+    };
+  
+    const selectedDate = availableDates.find(d => d.id === selectedDateId);
+  
+    const handleAccept = () => {
+      if (!selectedDateId) {
+        alert('Please select a date');
         return;
       }
-
-      const html2canvas = await import('html2canvas');
-      const canvas = await html2canvas.default(statisticsElement, {
-        scale: 2,
-        backgroundColor: '#ffffff',
-        logging: false,
-        useCORS: true
-      });
-
-      canvas.toBlob((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        const filename = selectedYear === 'all'
-          ? `speaker_statistics_all_${new Date().toISOString().split('T')[0]}.png`
-          : `speaker_statistics_${selectedYear}_${new Date().toISOString().split('T')[0]}.png`;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      });
-    } catch (error) {
-      console.error('Error generating statistics export:', error);
-      alert('Error generating statistics export.');
-    }
-  };
-
-  return (
-    <div id="statistics-content">
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>Past Speakers</h2>
-        <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
-          <select
-            value={selectedYear}
-            onChange={(e) => setSelectedYear(e.target.value)}
-            style={{...styles.select, width: 'auto', minWidth: '150px'}}
-          >
-            <option value="all">All Years</option>
-            {availableYears.map(year => (
-              <option key={year} value={year}>{year}</option>
-            ))}
-          </select>
-          <button onClick={handleExportCSV} style={{...styles.addBtn, backgroundColor: '#3498db'}}>
-            📊 Export CSV
-          </button>
-          <button onClick={handleExportPDF} style={{...styles.addBtn, backgroundColor: '#9b59b6'}}>
-            📄 Export Charts (PNG)
-          </button>
-          {isOrganizer && (
-            <button onClick={onAddPastSpeaker} style={styles.addBtn}>
-              + Add Past Speaker
-            </button>
-          )}
-        </div>
-      </div>
-      
-      <div id="statistics-charts-only">
-        <div style={{padding: '20px', backgroundColor: 'white', borderRadius: '8px', marginBottom: '25px'}}>
-          <h3 style={{...styles.subsectionTitle, textAlign: 'center', marginBottom: '20px'}}>
-            {selectedYear === 'all' ? 'All Years Statistics' : `${selectedYear} Statistics`}
-          </h3>
-          
-          <div style={styles.statsGrid}>
-            <div style={styles.statCard}>
-              <div style={styles.statNumber}>{filteredSpeakers.length}</div>
-              <div style={styles.statLabel}>Total Speakers</div>
-            </div>
-            <div style={styles.statCard}>
-              <div style={styles.statNumber}>{Object.keys(countryData).length}</div>
-              <div style={styles.statLabel}>Countries</div>
-            </div>
-            <div style={styles.statCard}>
-              <div style={styles.statNumber}>{affiliationCount}</div>
-              <div style={styles.statLabel}>Different Affiliations</div>
-            </div>
-            <div style={styles.statCard}>
-              <div style={styles.statNumber}>
-                {selectedYear === 'all' ? Object.keys(speakersByYear).length : 1}
+      onAccept(selectedDateId, talkTitle, talkAbstract);
+      setConfirmationType('accept');
+      setShowConfirmation(true);
+    };
+  
+    const handleDecline = () => {
+      if (window.confirm('Are you sure you want to decline this invitation?')) {
+        onDecline();
+        setConfirmationType('decline');
+        setShowConfirmation(true);
+      }
+    };
+  
+    return (
+      <div className="min-h-screen bg-neutral-50 p-8">
+        <div className="w-full max-w-5xl mx-auto bg-white rounded-lg shadow-lg p-8">
+          {/* Header */}
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-primary mb-2">
+              Barcelona Collaboratorium Seminar Invitation
+            </h1>
+            <p className="text-neutral-600">
+              Invitation for: <strong>{speaker.full_name}</strong> ({speaker.affiliation})
+            </p>
+          </div>
+  
+          {/* Invitation Letter */}
+          <div className="bg-neutral-50 rounded-lg p-6 mb-8 leading-relaxed">
+            <p className="mb-4">Dear {speaker.full_name},</p>
+            
+            <p className="mb-4">
+              We are delighted to invite you to give a talk at the{' '}
+              <a 
+                href="https://barcelonacollaboratorium.com/" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-primary font-semibold hover:underline"
+              >
+                Barcelona Collaboratorium for Modelling and Predictive Biology Seminar Series
+              </a>.
+            </p>
+  
+            <p className="mb-4">
+              Here is a list of our{' '}
+              <button
+                onClick={() => setShowStatistics(true)}
+                className="text-primary font-semibold hover:underline cursor-pointer bg-transparent border-none p-0"
+              >
+                past speakers
+              </button>.
+            </p>
+  
+            <p className="mb-4">
+              Your suggested host for the seminar is <strong>{speaker.host}</strong>.
+            </p>
+  
+            <p className="mb-4">
+              <strong>Travel and accommodation expenses are fully covered by the Barcelona Collaboratorium.</strong>
+            </p>
+  
+            <p className="mb-4">
+              Please let us know if you accept our invitation, and, if so, choose a preferred date below.
+            </p>
+  
+            <p>
+              Best regards,<br />
+              The Barcelona Collaboratorium Team
+            </p>
+          </div>
+  
+          {/* Talk Details */}
+          <div className="mb-8">
+            <h2 className="text-xl font-bold mb-4">Talk Details</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Talk Title</label>
+                <input 
+                  className="w-full border rounded-lg px-4 py-2" 
+                  value={talkTitle} 
+                  onChange={(e) => setTalkTitle(e.target.value)}
+                  placeholder="Enter your talk title or leave as (TBC)"
+                />
               </div>
-              <div style={styles.statLabel}>Years</div>
+  
+              <div>
+                <label className="block text-sm font-medium mb-2">Talk Abstract</label>
+                <textarea 
+                  className="w-full border rounded-lg px-4 py-2 min-h-[120px]" 
+                  value={talkAbstract} 
+                  onChange={(e) => setTalkAbstract(e.target.value)}
+                  placeholder="Enter your talk abstract or leave as (TBC)"
+                />
+              </div>
             </div>
           </div>
+  
+          {/* Date Selection Calendar */}
+          <div className="mb-8">
+            <h2 className="text-xl font-bold mb-4">Choose Your Preferred Date</h2>
+            
+            <div className="grid grid-cols-2 gap-6">
+              {/* Left: Calendar */}
+              <div className="border rounded-lg p-4">
+                {/* Calendar Header */}
+                <div className="flex justify-between items-center mb-3">
+                  <button onClick={previousMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+                    ←
+                  </button>
+                  <h3 className="text-base font-semibold">
+                    {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                  </h3>
+                  <button onClick={nextMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+                    →
+                  </button>
+                </div>
 
-          <div style={styles.chartsGrid}>
-            {selectedYear === 'all' && (
-              <div style={styles.chartBox}>
-                <h3 style={styles.chartTitle}>Speakers by Year</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={yearData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="year" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#3498db" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-
-            <div style={styles.chartBox}>
-              <h3 style={styles.chartTitle}>Distribution by Region</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={regionChartData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {regionChartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {topCountries.length > 0 && (
-            <div style={{...styles.chartBox, marginTop: '25px'}}>
-              <h3 style={styles.chartTitle}>Top 10 Countries</h3>
-              <ResponsiveContainer width="100%" height={400}>
-                <BarChart data={topCountries} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" />
-                  <YAxis dataKey="country" type="category" width={150} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#00BCD4" radius={[0, 8, 8, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>
-          {selectedYear === 'all' ? 'All Speakers by Year' : `Speakers in ${selectedYear}`}
-        </h3>
-        {Object.keys(speakersByYear)
-          .sort((a, b) => b - a)
-          .filter(year => selectedYear === 'all' || year === selectedYear)
-          .map(year => (
-          <div key={year} style={styles.yearSection}>
-            <h4 style={styles.yearTitle}>{year} ({speakersByYear[year].length} speakers)</h4>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Affiliation</th>
-                  <th style={styles.th}>Country</th>
-                  <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Talk Title</th>
-                </tr>
-              </thead>
-              <tbody>
-                {speakersByYear[year]
-                  .sort((a, b) => {
-                    const dateA = a.assigned_date?.toDate ? a.assigned_date.toDate() : new Date(a.assigned_date);
-                    const dateB = b.assigned_date?.toDate ? b.assigned_date.toDate() : new Date(b.assigned_date);
-                    return dateA - dateB;
-                  })
-                  .map(speaker => (
-                    <tr key={speaker.id}>
-                      <td style={styles.td}>{speaker.full_name}</td>
-                      <td style={styles.td}>{speaker.affiliation}</td>
-                      <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                      <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                      <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                    </tr>
+                {/* Day names */}
+                <div className="grid grid-cols-7 gap-1 mb-1">
+                  {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
+                    <div key={idx} className="text-center font-semibold text-xs text-neutral-600 py-1">
+                      {day}
+                    </div>
                   ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
+                </div>
 
-// Notification Panel Component
-const NotificationPanel = ({ responses, currentUser, formatDate }) => {
-  const [dismissed, setDismissed] = useState(new Set());
+                {/* Calendar grid */}
+                <div className="grid grid-cols-7 gap-1">
+                  {/* Empty cells */}
+                  {Array.from({ length: startingDayOfWeek }).map((_, idx) => (
+                    <div key={`empty-${idx}`} className="aspect-square"></div>
+                  ))}
 
-  const handleDismiss = (speakerId) => {
-    setDismissed(prev => new Set([...prev, speakerId]));
-  };
+                  {/* Days */}
+                  {Array.from({ length: daysInMonth }).map((_, idx) => {
+                    const day = idx + 1;
+                    const dateEntry = getDateInfo(day);
+                    
+                    let bgColor = 'bg-neutral-100 text-neutral-400';
+                    let cursor = 'cursor-default';
+                    let hoverClass = '';
+                    
+                    if (dateEntry) {
+                      cursor = 'cursor-pointer';
+                      if (dateEntry.id === selectedDateId) {
+                        bgColor = 'bg-primary text-white';
+                        hoverClass = 'hover:bg-primary/80';
+                      } else {
+                        bgColor = 'bg-green-500 text-white';
+                        hoverClass = 'hover:bg-green-600';
+                      }
+                    }
 
-  const visibleResponses = responses.filter(r => !dismissed.has(r.id));
+                    return (
+                      <div
+                        key={day}
+                        onClick={() => dateEntry && setSelectedDateId(dateEntry.id)}
+                        className={`aspect-square flex items-center justify-center rounded text-sm ${bgColor} ${cursor} ${hoverClass} transition-colors`}
+                      >
+                        {day}
+                      </div>
+                    );
+                  })}
+                </div>
 
-  if (visibleResponses.length === 0) return null;
-
-  return (
-    <div style={styles.notificationPanel}>
-      <h3 style={styles.notificationTitle}>📬 Recent Speaker Responses</h3>
-      {visibleResponses.map(speaker => {
-        const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
-        const isRelevantToUser = 
-          currentUser.role === 'Organizer' || 
-          speaker.host === currentUser.full_name ||
-          speaker.proposed_by_id === currentUser.id;
-        
-        return (
-          <div 
-            key={speaker.id} 
-            style={{
-              ...styles.notificationItem,
-              backgroundColor: isRelevantToUser ? '#e8f4fd' : '#f8f9fa',
-              borderLeft: isRelevantToUser ? '4px solid #3498db' : '4px solid #95a5a6'
-            }}
-          >
-            <div style={styles.notificationContent}>
-              <div style={styles.notificationHeader}>
-                <span style={{fontSize: '20px', marginRight: '8px'}}>
-                  {responseAction.action === 'accepted' ? '✅' : '❌'}
-                </span>
-                <strong>{speaker.full_name}</strong>
-                <span style={{marginLeft: '8px'}}>
-                  {responseAction.action === 'accepted' ? 'accepted' : 'declined'}
-                </span>
-                {isRelevantToUser && (
-                  <span style={styles.notificationBadge}>
-                    {speaker.host === currentUser.full_name ? 'You are host' : 
-                     speaker.proposed_by_id === currentUser.id ? 'Your proposal' : 
-                     'Organizer'}
-                  </span>
-                )}
+                <div className="mt-3 text-xs text-neutral-600">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-3 h-3 bg-green-500 rounded"></div>
+                    <span>Available dates</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 bg-neutral-100 rounded"></div>
+                    <span>Not available</span>
+                  </div>
+                </div>
               </div>
-              <div style={styles.notificationDetails}>
-                <span style={{fontSize: '13px', color: '#666'}}>
-                  {new Date(responseAction.timestamp).toLocaleString()}
-                </span>
-                {responseAction.action === 'accepted' && speaker.assigned_date && (
-                  <span style={{marginLeft: '15px', fontSize: '13px', color: '#555'}}>
-                    📅 {formatDate(speaker.assigned_date)}
-                  </span>
+
+              {/* Right: Selected Date Info & Available Users */}
+              <div className="space-y-4">
+                {selectedDate ? (
+                  <>
+                    {/* Selected Date Card */}
+                    <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4">
+                      <h4 className="font-semibold text-lg mb-3 text-blue-900">Selected Date</h4>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-blue-700 font-medium">📅 Date:</span>
+                          <span className="font-semibold">{formatDate(selectedDate.date)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-blue-700 font-medium">👤 Host:</span>
+                          <span className="font-semibold">{selectedDate.host}</span>
+                        </div>
+                        {selectedDate.notes && (
+                          <div className="flex items-start gap-2">
+                            <span className="text-blue-700 font-medium">📍 Location:</span>
+                            <span>{selectedDate.notes}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Available Fellows */}
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-semibold text-lg mb-3 flex items-center gap-2">
+                        <span className="text-green-600">✓</span>
+                        Available Fellows
+                      </h4>
+                      <div className="space-y-2">
+                        {userAvailability
+                          .filter(ua => ua.date_id === selectedDateId && ua.available !== false)
+                          .length > 0 ? (
+                          <div className="space-y-2">
+                            {userAvailability
+                              .filter(ua => ua.date_id === selectedDateId && ua.available !== false)
+                              .map((ua, idx) => (
+                                <div key={idx} className="flex items-center gap-2 text-sm bg-green-50 px-3 py-2 rounded">
+                                  <span className="text-green-600">✓</span>
+                                  <span>{ua.user_name}</span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-neutral-500 italic">
+                            All fellows are available on this date
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Unavailable Fellows */}
+                      {userAvailability.filter(ua => ua.date_id === selectedDateId && ua.available === false).length > 0 && (
+                        <div className="mt-4 pt-4 border-t">
+                          <h5 className="font-medium text-sm mb-2 flex items-center gap-2 text-neutral-600">
+                            <span className="text-red-600">✗</span>
+                            Unavailable
+                          </h5>
+                          <div className="space-y-2">
+                            {userAvailability
+                              .filter(ua => ua.date_id === selectedDateId && ua.available === false)
+                              .map((ua, idx) => (
+                                <div key={idx} className="flex items-center gap-2 text-sm bg-red-50 px-3 py-2 rounded">
+                                  <span className="text-red-600">✗</span>
+                                  <span className="text-neutral-600">{ua.user_name}</span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="border-2 border-dashed border-neutral-300 rounded-lg p-8 text-center">
+                    <p className="text-neutral-500 mb-2">📅</p>
+                    <p className="text-neutral-600 font-medium">Select a date from the calendar</p>
+                    <p className="text-sm text-neutral-500 mt-1">
+                      Available dates are shown in green
+                    </p>
+                  </div>
                 )}
-                <span style={{marginLeft: '15px', fontSize: '13px', color: '#555'}}>
-                  🎤 Host: {speaker.host}
-                </span>
               </div>
             </div>
+          </div>
+  
+          {/* Action Buttons */}
+          <div className="flex gap-4 justify-end">
             <button 
-              onClick={() => handleDismiss(speaker.id)}
-              style={styles.notificationDismiss}
-              title="Dismiss"
+              onClick={handleDecline} 
+              className="px-6 py-3 border-2 border-neutral-300 text-neutral-700 rounded-lg font-semibold hover:bg-neutral-100 transition-colors"
             >
-              ×
+              Decline Invitation
+            </button>
+            <button 
+              onClick={handleAccept}
+              disabled={!selectedDateId}
+              className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
+                selectedDateId 
+                  ? 'bg-primary text-white hover:bg-primary/80' 
+                  : 'bg-neutral-300 text-neutral-500 cursor-not-allowed'
+              }`}
+            >
+              Accept & Schedule
             </button>
           </div>
-        );
-      })}
-    </div>
-  );
-};
-
-// Dashboard View
-const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, onRejectSpeaker, onResendInvitation, onEditSpeaker, onEditConfirmed, onViewActions, onViewAgenda, onGeneratePoster, onDeleteInvited, getRankingColor, getStatusColor, formatDate }) => {
-  if (!userRole) {
-    return <div style={styles.emptyText}>Loading user data...</div>;
+        </div>
+  
+        {/* Statistics Modal - Full StatisticsView */}
+        {showStatistics && (
+          <div 
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowStatistics(false)}
+          >
+            <div 
+              className="bg-white rounded-lg shadow-xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-6 border-b flex items-center justify-between bg-primary text-white sticky top-0 z-10">
+                <h2 className="text-2xl font-bold">Past Speakers</h2>
+                <button 
+                  onClick={() => setShowStatistics(false)}
+                  className="text-white hover:text-neutral-200"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="overflow-y-auto flex-1 p-6">
+                <StatisticsView 
+                  speakers={pastSpeakers} 
+                  formatDate={formatDate}
+                  onAddPastSpeaker={() => {}} // Not needed for speaker view
+                  isOrganizer={false} // Hide organizer-only features
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   }
 
-  // Helper function to check if invitation is overdue
-  const isInvitationOverdue = (speaker) => {
-    if (speaker.status !== 'Invited' || !speaker.response_deadline) return false;
-    const deadline = speaker.response_deadline.toDate ? speaker.response_deadline.toDate() : new Date(speaker.response_deadline);
-    return deadline < new Date();
-  };
-
-  // Get recent speaker responses (last 7 days)
-  const getRecentResponses = () => {
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
-    return speakers.filter(speaker => {
-      if (!speaker.actions || speaker.actions.length === 0) return false;
+/* ---------------------
+   DashboardView
+   (Simplified but includes lists, actions, and charts)
+   --------------------- */
+   function DashboardView({
+    userRole, speakers, availableDates,
+    upcomingLunchReminders,
+    onAcceptSpeaker, onRejectSpeaker, onResendInvitation, onEditSpeaker,
+    onEditConfirmed, onViewActions, onViewAgenda, onGeneratePoster, onDeleteInvited,
+    onVoteSpeaker, currentUser, getRankingColor, getStatusColor, formatDate
+  }) {
+    const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
+    const [dismissedLunchReminders, setDismissedLunchReminders] = useState(new Set());
+  
+    // Get recent speaker responses (last 7 days)
+    const getRecentResponses = () => {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       
-      const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
-      if (!responseAction) return false;
-      
-      const responseDate = new Date(responseAction.timestamp);
-      return responseDate >= sevenDaysAgo;
-    }).sort((a, b) => {
-      const aAction = a.actions.find(act => act.type === 'speaker_responded');
-      const bAction = b.actions.find(act => act.type === 'speaker_responded');
-      return new Date(bAction.timestamp) - new Date(aAction.timestamp);
-    });
-  };
-
-  const recentResponses = getRecentResponses();
-
-  if (userRole.role === 'Organizer') {
+      return speakers.filter(speaker => {
+        if (!speaker.actions || speaker.actions.length === 0) return false;
+        const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
+        if (!responseAction) return false;
+        const responseDate = new Date(responseAction.timestamp);
+        return responseDate >= sevenDaysAgo && !dismissedAlerts.has(speaker.id);
+      }).sort((a, b) => {
+        const aAction = a.actions.find(act => act.type === 'speaker_responded');
+        const bAction = b.actions.find(act => act.type === 'speaker_responded');
+        return new Date(bAction.timestamp) - new Date(aAction.timestamp);
+      });
+    };
+  
+    const recentResponses = getRecentResponses();
     const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
     const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
     
+    // Only show UPCOMING speakers
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const acceptedSpeakers = speakers.filter(s => {
+    const upcomingSpeakers = speakers.filter(s => {
       if (s.status !== 'Accepted') return false;
-      if (!s.assigned_date) return true;
+      if (!s.assigned_date) return false;
       const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
       return speakerDate >= today;
     });
-
+  
+    // Calculate overdue speakers
+    const overdueSpeakers = invitedSpeakers.filter(s => {
+      if (!s.response_deadline) return false;
+      const deadline = safeToDate(s.response_deadline);
+      return deadline < new Date();
+    });
+  
+    const canEditSpeaker = (speaker) => {
+      if (currentUser.role === 'Organizer') return true;
+      return speaker.host === currentUser.full_name;
+    };
+  
+    // Filter lunch reminders that haven't been dismissed
+    const visibleLunchReminders = upcomingLunchReminders 
+      ? upcomingLunchReminders.filter(s => !dismissedLunchReminders.has(s.id))
+      : [];
+  
     return (
-      <div style={styles.dashboardContainer}>
-        {recentResponses.length > 0 && (
-          <NotificationPanel 
-            responses={recentResponses} 
-            currentUser={userRole}
-            formatDate={formatDate}
-          />
+      <div className="space-y-6">
+        {/* Lunch Reservation Reminders */}
+        {visibleLunchReminders.length > 0 && (
+          <div className="bg-amber-50 border-l-4 border-amber-500 rounded-lg shadow-md p-5">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-3xl">🍽️</span>
+                  <h4 className="font-bold text-amber-900 text-lg">Lunch Reservation Reminders</h4>
+                </div>
+                <div className="space-y-3">
+                  {visibleLunchReminders.map(speaker => (
+                    <div key={speaker.id} className="flex items-start justify-between bg-white rounded-lg p-3 border border-amber-200">
+                      <div className="flex-1">
+                        <div className="font-semibold text-amber-900">{speaker.full_name}</div>
+                        <div className="text-sm text-amber-700 mt-1">
+                          Seminar in one week: <strong>{formatDate(speaker.assigned_date)}</strong>
+                        </div>
+                        <div className="text-xs text-amber-600 mt-1">
+                          📍 Don't forget to make lunch reservations!
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setDismissedLunchReminders(prev => new Set([...prev, speaker.id]))}
+                        className="text-amber-500 hover:text-amber-700 ml-2"
+                        title="Dismiss"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         )}
-        <div style={styles.dashboardMain}>
-          <h2 style={styles.sectionTitle}>Organizer Dashboard</h2>
-          
-          <div style={styles.section}>
-            <h3 style={styles.subsectionTitle}>Proposed Speakers Awaiting Approval ({proposedSpeakers.length})</h3>
-            {proposedSpeakers.length === 0 ? (
-              <p style={styles.emptyText}>No speakers pending approval</p>
-            ) : (
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Name</th>
-                    <th style={styles.th}>Email</th>
-                    <th style={styles.th}>Affiliation</th>
-                    <th style={styles.th}>Country</th>
-                    <th style={styles.th}>Expertise</th>
-                    <th style={styles.th}>Ranking</th>
-                    <th style={styles.th}>Notes</th>
-                    <th style={styles.th}>Host</th>
-                    <th style={styles.th}>Proposed By</th>
-                    <th style={styles.th}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {proposedSpeakers.map(speaker => (
-                    <tr key={speaker.id}>
-                      <td style={styles.td}>{speaker.full_name}</td>
-                      <td style={styles.td}>{speaker.email}</td>
-                      <td style={styles.td}>{speaker.affiliation}</td>
-                      <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                      <td style={styles.td}>{speaker.area_of_expertise}</td>
-                      <td style={styles.td}>
-                        <span style={{
-                          ...styles.badge,
-                          backgroundColor: getRankingColor(speaker.ranking)
-                        }}>
-                          {speaker.ranking}
-                        </span>
-                      </td>
-                      <td style={styles.td}>{speaker.notes}</td>
-                      <td style={styles.td}>{speaker.host}</td>
-                      <td style={styles.td}>{speaker.proposed_by_name}</td>
-                      <td style={styles.td}>
-                        <button 
-                          onClick={() => onEditSpeaker(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                          Edit
-                        </button>
-                        <button 
-                          onClick={() => onAcceptSpeaker(speaker.id)}
-                          style={{...styles.actionBtn, ...styles.acceptBtn}}>
-                          Accept
-                        </button>
-                        <button 
-                          onClick={() => onRejectSpeaker(speaker.id)}
-                          style={{...styles.actionBtn, ...styles.declineBtn}}>
-                          Reject
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+  
+        {/* Overview Stats */}
+        <div className="grid grid-cols-4 gap-4">
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm text-neutral-500 font-medium">Proposed</div>
+            <div className="text-3xl font-bold text-primary mt-2">{proposedSpeakers.length}</div>
           </div>
-
-          <div style={styles.section}>
-            <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
-            {invitedSpeakers.length === 0 ? (
-              <p style={styles.emptyText}>No pending invitations</p>
-            ) : (
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Name</th>
-                    <th style={styles.th}>Email</th>
-                    <th style={styles.th}>Invited On</th>
-                    <th style={styles.th}>Deadline</th>
-                    <th style={styles.th}>Host</th>
-                    <th style={styles.th}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invitedSpeakers.map(speaker => (
-                    <tr 
-                      key={speaker.id}
-                      style={isInvitationOverdue(speaker) ? {backgroundColor: '#ffe0b2'} : {}}
-                    >
-                      <td style={styles.td}>
-                        {speaker.full_name}
-                        {isInvitationOverdue(speaker) && (
-                          <span style={{marginLeft: '8px', color: '#ff9800', fontWeight: '600'}}>⚠️</span>
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm text-neutral-500 font-medium">Invited</div>
+            <div className="text-3xl font-bold text-primary mt-2">{invitedSpeakers.length}</div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="text-sm text-neutral-500 font-medium">Upcoming</div>
+            <div className="text-3xl font-bold text-primary mt-2">{upcomingSpeakers.length}</div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
+            <div className="text-sm text-red-600 font-semibold">Overdue</div>
+            <div className="text-3xl font-bold text-red-600 mt-2">{overdueSpeakers.length}</div>
+          </div>
+        </div>
+  
+        {/* Proposed Speakers */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-xl font-semibold mb-4 text-neutral-800">
+            Proposed Speakers Awaiting Review ({proposedSpeakers.length})
+          </h3>
+          {proposedSpeakers.length === 0 ? (
+            <p className="text-neutral-500 text-center py-8">No proposed speakers</p>
+          ) : (
+            <div className="space-y-3">
+              {proposedSpeakers.map(s => {
+                const userVoted = s.votes?.some(v => v.user_id === currentUser.id);
+                const voteCount = s.votes?.length || 0;
+                return (
+                  <div key={s.id} className="border border-neutral-200 rounded-lg p-4 hover:border-primary transition-colors">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="font-semibold text-lg text-neutral-800">{s.full_name}</div>
+                        <div className="text-sm text-neutral-600 mt-1">
+                          {s.area_of_expertise} • {s.affiliation} • {s.country}
+                        </div>
+                        <div className="text-xs text-neutral-500 mt-2">
+                          Proposed by {s.proposed_by_name} • Host: {s.host}
+                        </div>
+                        {s.notes && (
+                          <div className="text-sm text-neutral-600 mt-2 italic bg-neutral-50 p-2 rounded">
+                            {s.notes}
+                          </div>
                         )}
-                      </td>
-                      <td style={styles.td}>{speaker.email}</td>
-                      <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
-                      <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
-                      <td style={styles.td}>{speaker.host}</td>
-                      <td style={styles.td}>
-                        <button 
-                          onClick={() => onResendInvitation(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                          Resend/View
-                        </button>
-                        <button 
-                          onClick={() => onViewActions(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
-                          Actions
-                        </button>
-                        <button 
-                          onClick={() => onDeleteInvited(speaker.id)}
-                          style={{...styles.actionBtn, ...styles.declineBtn}}>
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <div style={styles.section}>
-            <h3 style={styles.subsectionTitle}>Confirmed Upcoming Speakers ({acceptedSpeakers.length})</h3>
-            <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
-              Showing only upcoming speakers. View all past speakers in the "Past Speakers" tab.
-            </p>
-            {acceptedSpeakers.length === 0 ? (
-              <p style={styles.emptyText}>No confirmed upcoming speakers</p>
-            ) : (
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Name</th>
-                    <th style={styles.th}>Talk Title</th>
-                    <th style={styles.th}>Date</th>
-                    <th style={styles.th}>Host</th>
-                    <th style={styles.th}>Abstract</th>
-                    <th style={styles.th}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {acceptedSpeakers.map(speaker => (
-                    <tr key={speaker.id}>
-                      <td style={styles.td}>{speaker.full_name}</td>
-                      <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                      <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                      <td style={styles.td}>{speaker.host}</td>
-                      <td style={styles.td}>
-                        {speaker.talk_abstract ? (
-                          <span style={styles.abstractPreview} title={speaker.talk_abstract}>
-                            {speaker.talk_abstract.substring(0, 50)}...
+                        <div className="mt-2">
+                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
+                            {s.ranking}
                           </span>
-                        ) : (
-                          <em style={{color: '#999'}}>No abstract</em>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 ml-4">
+                        <button
+                          onClick={() => onVoteSpeaker(s.id, 'upvote')}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            userVoted 
+                              ? 'bg-primary text-white' 
+                              : 'border-2 border-primary text-primary hover:bg-primary hover:text-white'
+                          }`}
+                        >
+                          👍 {voteCount}
+                        </button>
+                        {currentUser.role === 'Organizer' && (
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => onAcceptSpeaker(s.id)} 
+                              className="px-3 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
+                            >
+                              Invite
+                            </button>
+                            <button 
+                              onClick={() => onRejectSpeaker(s.id)} 
+                              className="px-3 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-colors"
+                            >
+                              Decline
+                            </button>
+                          </div>
                         )}
-                      </td>
-                      <td style={styles.td}>
-                        <button 
-                          onClick={() => onViewAgenda(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
-                          Agenda
-                        </button>
-                        <button 
-                          onClick={() => onGeneratePoster(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#16a085'}}>
-                          Poster
-                        </button>
-                        <button 
-                          onClick={() => onEditConfirmed(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                          Edit
-                        </button>
-                        <button 
-                          onClick={() => onViewActions(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                          Actions
-                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+  
+        {/* Invited Speakers */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-xl font-semibold mb-4 text-neutral-800">
+            Invited Speakers Awaiting Response ({invitedSpeakers.length})
+          </h3>
+          <InvitedList
+            speakers={invitedSpeakers}
+            onResendInvitation={onResendInvitation}
+            onDeleteInvited={onDeleteInvited}
+            onViewAgenda={onViewAgenda}
+            formatDate={formatDate}
+            canEdit={(s) => canEditSpeaker(s)}
+            currentUserRole={currentUser.role}
+          />
+        </div>
+  
+        {/* Confirmed Upcoming Speakers */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-xl font-semibold mb-4 text-neutral-800">
+            Confirmed Upcoming Speakers ({upcomingSpeakers.length})
+          </h3>
+          {upcomingSpeakers.length === 0 ? (
+            <p className="text-neutral-500 text-center py-8">No upcoming confirmed speakers</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b-2 border-neutral-200">
+                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Name</th>
+                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Title</th>
+                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Date</th>
+                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Host</th>
+                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcomingSpeakers.map(s => (
+                    <tr key={s.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                      <td className="py-3 px-4">{s.full_name}</td>
+                      <td className="py-3 px-4">{s.talk_title || '(TBC)'}</td>
+                      <td className="py-3 px-4">{formatDate(s.assigned_date)}</td>
+                      <td className="py-3 px-4">{s.host}</td>
+                      <td className="py-3 px-4">
+                        {canEditSpeaker(s) && (
+                          <div className="flex gap-2">
+                            <button onClick={() => onViewAgenda(s)} className="px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600">Agenda</button>
+                            <button onClick={() => onEditConfirmed(s)} className="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Edit</button>
+                            <button onClick={() => onViewActions(s)} className="px-3 py-1 bg-sky-500 text-white rounded text-xs hover:bg-sky-600">Actions</button>
+                          </div>
+                        )}
+                        {!canEditSpeaker(s) && (
+                          <span className="text-xs text-neutral-400">Host only</span>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+  
+        {/* Recent Speaker Responses - AT BOTTOM */}
+        {recentResponses.length > 0 && (
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-xl font-semibold mb-4 text-neutral-800 flex items-center gap-2">
+              <span className="text-2xl">📬</span>
+              Recent Speaker Responses
+            </h3>
+            <div className="space-y-3">
+              {recentResponses.map(speaker => {
+                const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
+                const isRelevantToUser = 
+                  currentUser.role === 'Organizer' || 
+                  speaker.host === currentUser.full_name ||
+                  speaker.proposed_by_id === currentUser.id;
+                
+                return (
+                  <div 
+                    key={speaker.id}
+                    className={`border-l-4 rounded-lg p-4 ${
+                      isRelevantToUser ? 'bg-blue-50 border-blue-500' : 'bg-neutral-50 border-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-2xl">
+                            {responseAction.action === 'accepted' ? '✅' : '❌'}
+                          </span>
+                          <div>
+                            <div className="font-semibold text-neutral-800">{speaker.full_name}</div>
+                            <div className="text-sm text-neutral-600">
+                              {responseAction.action === 'accepted' ? 'accepted' : 'declined'} the invitation
+                            </div>
+                          </div>
+                          {isRelevantToUser && (
+                            <span className="ml-2 px-2 py-1 bg-blue-500 text-white text-xs font-semibold rounded">
+                              {speaker.host === currentUser.full_name ? 'You are host' : 
+                               speaker.proposed_by_id === currentUser.id ? 'Your proposal' : 
+                               'Organizer'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-neutral-500 ml-8">
+                          {new Date(responseAction.timestamp).toLocaleString()}
+                          {responseAction.action === 'accepted' && speaker.assigned_date && (
+                            <span className="ml-3">
+                              📅 {formatDate(speaker.assigned_date)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setDismissedAlerts(prev => new Set([...prev, speaker.id]))}
+                        className="text-neutral-400 hover:text-neutral-600"
+                        title="Dismiss"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+/* ---------------------
+   AvailabilityView - Calendar Style with Side Panel
+   --------------------- */
+   function AvailabilityView({ dates, userAvailability, currentUser, onUpdateAvailability, formatDate }) {
+    // Initialize to first available date's month
+    const getInitialMonth = () => {
+      if (dates.length === 0) return new Date();
+      const firstDate = dates[0].date?.toDate ? dates[0].date.toDate() : new Date(dates[0].date);
+      return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+    };
+    
+    const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
+     
+    if (!dates) return <div>Loading dates...</div>;
+  
+    const getDaysInMonth = (date) => {
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const daysInMonth = lastDay.getDate();
+      const startingDayOfWeek = firstDay.getDay();
+      
+      return { daysInMonth, startingDayOfWeek, year, month };
+    };
+  
+    const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth);
+  
+    const previousMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
+    };
+  
+    const nextMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
+    };
+  
+    const getDateInfo = (day) => {
+      const checkDate = new Date(year, month, day);
+      checkDate.setHours(0, 0, 0, 0);
+      
+      const dateEntry = dates.find(d => {
+        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        entryDate.setHours(0, 0, 0, 0);
+        return entryDate.getTime() === checkDate.getTime();
+      });
+  
+      if (!dateEntry) return null;
+  
+      const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === dateEntry.id);
+      const available = ua ? ua.available : true;
+  
+      return { dateEntry, available };
+    };
+  
+    const handleDateClick = (day) => {
+      const dateInfo = getDateInfo(day);
+      if (dateInfo) {
+        onUpdateAvailability(dateInfo.dateEntry.id, !dateInfo.available);
+      }
+    };
+  
+    return (
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-2xl font-semibold mb-6">My Availability</h2>
+        
+        {/* Legend */}
+        <div className="flex gap-4 mb-6 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-green-500 rounded"></div>
+            <span>Available</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-orange-500 rounded"></div>
+            <span>Unavailable</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-neutral-200 rounded"></div>
+            <span>No seminar scheduled</span>
+          </div>
+        </div>
+  
+        {/* Two Column Layout */}
+        <div className="grid grid-cols-2 gap-6">
+          {/* Left: Calendar - Smaller */}
+          <div className="border rounded-lg p-4">
+            {/* Header */}
+            <div className="flex justify-between items-center mb-4">
+              <button onClick={previousMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+                ←
+              </button>
+              <h3 className="text-base font-semibold">
+                {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </h3>
+              <button onClick={nextMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+                →
+              </button>
+            </div>
+  
+            {/* Day names */}
+            <div className="grid grid-cols-7 gap-1 mb-2">
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
+                <div key={idx} className="text-center font-semibold text-xs text-neutral-600 py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+  
+            {/* Calendar grid */}
+            <div className="grid grid-cols-7 gap-1">
+              {/* Empty cells for days before month starts */}
+              {Array.from({ length: startingDayOfWeek }).map((_, idx) => (
+                <div key={`empty-${idx}`} className="aspect-square"></div>
+              ))}
+  
+              {/* Days of the month */}
+              {Array.from({ length: daysInMonth }).map((_, idx) => {
+                const day = idx + 1;
+                const dateInfo = getDateInfo(day);
+                
+                let bgColor = 'bg-neutral-100';
+                let cursor = 'cursor-default';
+                let hoverClass = '';
+                
+                if (dateInfo) {
+                  cursor = 'cursor-pointer';
+                  if (dateInfo.available) {
+                    bgColor = 'bg-green-500 text-white';
+                    hoverClass = 'hover:bg-green-600';
+                  } else {
+                    bgColor = 'bg-orange-500 text-white';
+                    hoverClass = 'hover:bg-orange-600';
+                  }
+                }
+  
+                return (
+                  <div
+                    key={day}
+                    onClick={() => dateInfo && handleDateClick(day)}
+                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${cursor} ${hoverClass} transition-colors`}
+                  >
+                    {day}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+  
+          {/* Right: Scrollable List of Upcoming Seminars */}
+          <div className="border rounded-lg p-4">
+            <h3 className="text-lg font-semibold mb-4">Upcoming Seminars</h3>
+            {dates.length === 0 ? (
+              <p className="text-sm text-neutral-500 text-center py-8">No upcoming seminars scheduled.</p>
+            ) : (
+              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
+                {dates.map(d => {
+                  const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === d.id);
+                  const available = ua ? ua.available : true;
+                  return (
+                    <div key={d.id} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <div className="font-semibold text-base">{formatDate(d.date)}</div>
+                          <div className="text-sm text-neutral-600 mt-1">
+                            <strong>Host:</strong> {d.host}
+                          </div>
+                          {d.notes && (
+                            <div className="text-xs text-neutral-500 mt-1">
+                              📍 {d.notes}
+                            </div>
+                          )}
+                        </div>
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${available ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'}`}>
+                          {available ? '✓ Available' : '✗ Unavailable'}
+                        </span>
+                      </div>
+                      <button 
+                        onClick={() => onUpdateAvailability(d.id, !available)} 
+                        className="w-full px-3 py-2 bg-primary text-white rounded text-sm hover:bg-primary/80 transition-colors"
+                      >
+                        {available ? 'Mark Unavailable' : 'Mark Available'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
@@ -3592,471 +2429,587 @@ const DashboardView = ({ userRole, speakers, availableDates, onAcceptSpeaker, on
     );
   }
 
-  // Senior Fellow Dashboard
-  const mySpeakers = speakers.filter(s => s.proposed_by_id === userRole.id);
-  const allProposedSpeakers = speakers.filter(s => s.status === 'Proposed');
-  const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
+/* ---------------------
+   StatisticsView (charts and past speakers)
+   --------------------- */
+   function StatisticsView({ speakers, formatDate, onAddPastSpeaker, isOrganizer }) {
+    const [selectedYear, setSelectedYear] = useState('all');
+    const [collapsedYears, setCollapsedYears] = useState(new Set());
+    
+    const acceptedSpeakers = speakers.filter(s => s.status === 'Accepted');
+    
+    const getYearFromDate = (date) => {
+      if (!date) return null;
+      const d = date.toDate ? date.toDate() : new Date(date);
+      return d.getFullYear();
+    };
   
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const acceptedSpeakers = speakers.filter(s => {
-    if (s.status !== 'Accepted') return false;
-    if (!s.assigned_date) return true;
-    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
-    return speakerDate >= today;
-  });
-
-  return (
-    <div style={styles.dashboardContainer}>
-      {recentResponses.length > 0 && (
-        <NotificationPanel 
-          responses={recentResponses} 
-          currentUser={userRole}
-          formatDate={formatDate}
-        />
-      )}
-      <div style={styles.dashboardMain}>
-        <h2 style={styles.sectionTitle}>Senior Fellow Dashboard</h2>
-        
-        <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>All Proposed Speakers ({allProposedSpeakers.length})</h3>
-          {allProposedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No speakers have been proposed yet</p>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Affiliation</th>
-                  <th style={styles.th}>Country</th>
-                  <th style={styles.th}>Expertise</th>
-                  <th style={styles.th}>Ranking</th>
-                  <th style={styles.th}>Notes</th>
-                  <th style={styles.th}>Host</th>
-                  <th style={styles.th}>Proposed By</th>
-                </tr>
-              </thead>
-              <tbody>
-                {allProposedSpeakers.map(speaker => (
-                  <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                    <td style={styles.td}>
-                      {speaker.full_name}
-                      {speaker.proposed_by_id === userRole.id && (
-                        <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                          (You)
-                        </span>
-                      )}
-                    </td>
-                    <td style={styles.td}>{speaker.affiliation}</td>
-                    <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                    <td style={styles.td}>{speaker.area_of_expertise}</td>
-                    <td style={styles.td}>
-                      <span style={{
-                        ...styles.badge,
-                        backgroundColor: getRankingColor(speaker.ranking)
-                      }}>
-                        {speaker.ranking}
-                      </span>
-                    </td>
-                    <td style={styles.td}>{speaker.notes}</td>
-                    <td style={styles.td}>{speaker.host}</td>
-                    <td style={styles.td}>{speaker.proposed_by_name}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+    const toggleYear = (year) => {
+      setCollapsedYears(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(year)) {
+          newSet.delete(year);
+        } else {
+          newSet.add(year);
+        }
+        return newSet;
+      });
+    };
+  
+    // Filter speakers by selected year
+    const filteredSpeakers = selectedYear === 'all' 
+      ? acceptedSpeakers 
+      : acceptedSpeakers.filter(s => getYearFromDate(s.assigned_date) === parseInt(selectedYear));
+  
+    const speakersByYear = acceptedSpeakers.reduce((acc, s) => {
+      const year = getYearFromDate(s.assigned_date);
+      if (year) {
+        if (!acc[year]) acc[year] = [];
+        acc[year].push(s);
+      }
+      return acc;
+    }, {});
+  
+    const availableYears = Object.keys(speakersByYear).sort();
+  
+    const yearData = Object.keys(speakersByYear)
+      .sort()
+      .map(year => ({
+        year,
+        count: speakersByYear[year].length
+      }));
+  
+    const countryData = filteredSpeakers.reduce((acc, s) => {
+      const country = s.country || 'Unknown';
+      acc[country] = (acc[country] || 0) + 1;
+      return acc;
+    }, {});
+  
+    const topCountries = Object.entries(countryData)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([country, count]) => ({ country, count }));
+  
+    const uniqueAffiliations = new Set(
+      filteredSpeakers
+        .map(s => s.affiliation)
+        .filter(a => a && a.trim())
+    );
+    const affiliationCount = uniqueAffiliations.size;
+  
+    const getRegion = (country) => {
+      if (!country) return 'Unknown';
+      if (country === 'Spain') return 'Spain';
+      
+      const europeanCountries = ['Austria', 'Belgium', 'Denmark', 'France', 'Germany', 'Italy', 
+        'Netherlands', 'Switzerland', 'United Kingdom', 'Sweden', 'Norway', 'Bulgaria', 'Croatia', 
+        'Cyprus', 'Czech Republic', 'Estonia', 'Finland', 'Greece', 'Hungary', 'Ireland', 'Latvia', 
+        'Lithuania', 'Luxembourg', 'Malta', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia'];
+      if (europeanCountries.includes(country)) return 'Europe (excl. Spain)';
+      
+      const northAmerica = ['United States', 'Canada', 'Mexico'];
+      if (northAmerica.includes(country)) return 'North America';
+      
+      const asia = ['China', 'Japan', 'India', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines'];
+      if (asia.includes(country)) return 'Asia';
+      
+      const oceania = ['Australia', 'New Zealand'];
+      if (oceania.includes(country)) return 'Oceania';
+      
+      return 'Other';
+    };
+  
+    const regionData = filteredSpeakers.reduce((acc, s) => {
+      const region = getRegion(s.country);
+      acc[region] = (acc[region] || 0) + 1;
+      return acc;
+    }, {});
+  
+    const regionChartData = Object.entries(regionData).map(([region, count]) => ({
+      name: region,
+      value: count
+    }));
+  
+    const COLORS = ['#d63447', '#3498db', '#e67e22', '#f1c40f', '#2ecc71', '#95a5a6'];
+  
+    const handleExportCSV = () => {
+      const headers = ['Name', 'Affiliation', 'Country', 'Email', 'Date', 'Talk Title', 'Host', 'Area of Expertise'];
+      const rows = filteredSpeakers
+        .sort((a, b) => {
+          const dateA = a.assigned_date?.toDate ? a.assigned_date.toDate() : new Date(a.assigned_date);
+          const dateB = b.assigned_date?.toDate ? b.assigned_date.toDate() : new Date(b.assigned_date);
+          return dateB - dateA;
+        })
+        .map(speaker => [
+          speaker.full_name,
+          speaker.affiliation,
+          speaker.country || 'N/A',
+          speaker.email || 'N/A',
+          formatDate(speaker.assigned_date),
+          speaker.talk_title || 'N/A',
+          speaker.host || 'N/A',
+          speaker.area_of_expertise || 'N/A'
+        ]);
+  
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+      ].join('\n');
+  
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      const filename = selectedYear === 'all' 
+        ? `past_speakers_all_${new Date().toISOString().split('T')[0]}.csv`
+        : `past_speakers_${selectedYear}_${new Date().toISOString().split('T')[0]}.csv`;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+  
+    const handleExportPDF = async () => {
+      try {
+        const statisticsElement = document.getElementById('statistics-charts-only');
+        if (!statisticsElement) {
+          alert('Statistics content not found');
+          return;
+        }
+  
+        const html2canvas = await import('html2canvas');
+        const canvas = await html2canvas.default(statisticsElement, {
+          scale: 2,
+          backgroundColor: '#ffffff',
+          logging: false,
+          useCORS: true
+        });
+  
+        canvas.toBlob((blob) => {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          const filename = selectedYear === 'all'
+            ? `speaker_statistics_all_${new Date().toISOString().split('T')[0]}.png`
+            : `speaker_statistics_${selectedYear}_${new Date().toISOString().split('T')[0]}.png`;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        });
+      } catch (error) {
+        console.error('Error generating statistics export:', error);
+        alert('Error generating statistics export.');
+      }
+    };
+  
+    return (
+      <div id="statistics-content">
+        <div style={styles.sectionHeader}>
+          <h2 style={styles.sectionTitle}>Past Speakers</h2>
+          <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(e.target.value)}
+              style={{...styles.select, width: 'auto', minWidth: '150px'}}
+            >
+              <option value="all">All Years</option>
+              {availableYears.map(year => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+            <button onClick={handleExportCSV} style={{...styles.addBtn, backgroundColor: '#3498db'}}>
+              📊 Export CSV
+            </button>
+            <button onClick={handleExportPDF} style={{...styles.addBtn, backgroundColor: '#9b59b6'}}>
+              📄 Export Charts (PNG)
+            </button>
+            {isOrganizer && (
+              <button onClick={onAddPastSpeaker} style={styles.addBtn}>
+                + Add Past Speaker
+              </button>
+            )}
+          </div>
         </div>
-
+        
+        <div id="statistics-charts-only">
+          <div style={{padding: '20px', backgroundColor: 'white', borderRadius: '8px', marginBottom: '25px'}}>
+            <h3 style={{...styles.subsectionTitle, textAlign: 'center', marginBottom: '20px'}}>
+              {selectedYear === 'all' ? 'All Years Statistics' : `${selectedYear} Statistics`}
+            </h3>
+            
+            <div style={styles.statsGrid}>
+              <div style={styles.statCard}>
+                <div style={styles.statNumber}>{filteredSpeakers.length}</div>
+                <div style={styles.statLabel}>Total Speakers</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statNumber}>{Object.keys(countryData).length}</div>
+                <div style={styles.statLabel}>Countries</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statNumber}>{affiliationCount}</div>
+                <div style={styles.statLabel}>Different Affiliations</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statNumber}>
+                  {selectedYear === 'all' ? Object.keys(speakersByYear).length : 1}
+                </div>
+                <div style={styles.statLabel}>Years</div>
+              </div>
+            </div>
+  
+            <div style={styles.chartsGrid}>
+              {selectedYear === 'all' && (
+                <div style={styles.chartBox}>
+                  <h3 style={styles.chartTitle}>Speakers by Year</h3>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={yearData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="year" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#3498db" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+  
+              <div style={styles.chartBox}>
+                <h3 style={styles.chartTitle}>Distribution by Region</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={regionChartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {regionChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+  
+            {topCountries.length > 0 && (
+              <div style={{...styles.chartBox, marginTop: '25px'}}>
+                <h3 style={styles.chartTitle}>Top 10 Countries</h3>
+                <ResponsiveContainer width="100%" height={400}>
+                  <BarChart data={topCountries} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" />
+                    <YAxis dataKey="country" type="category" width={150} />
+                    <Tooltip />
+                    <Bar dataKey="count" fill="#00BCD4" radius={[0, 8, 8, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </div>
+  
         <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>Invited Speakers Awaiting Response ({invitedSpeakers.length})</h3>
-          {invitedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No pending invitations</p>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Email</th>
-                  <th style={styles.th}>Expertise</th>
-                  <th style={styles.th}>Host</th>
-                  <th style={styles.th}>Invited On</th>
-                  <th style={styles.th}>Deadline</th>
-                  <th style={styles.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invitedSpeakers.map(speaker => (
-                  <tr 
-                    key={speaker.id} 
+          <h3 style={styles.subsectionTitle}>
+            {selectedYear === 'all' ? 'All Speakers by Year' : `Speakers in ${selectedYear}`}
+          </h3>
+          {Object.keys(speakersByYear)
+            .sort((a, b) => b - a)
+            .filter(year => selectedYear === 'all' || year === selectedYear)
+            .map(year => {
+              const isCollapsed = collapsedYears.has(year);
+              return (
+                <div key={year} style={styles.yearSection}>
+                  <h4 
                     style={{
-                      ...(speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}),
-                      ...(isInvitationOverdue(speaker) ? {backgroundColor: '#ffe0b2'} : {})
+                      ...styles.yearTitle, 
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
                     }}
+                    onClick={() => toggleYear(year)}
                   >
-                    <td style={styles.td}>
-                      {speaker.full_name}
-                      {speaker.proposed_by_id === userRole.id && (
-                        <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                          (Your proposal)
+                    <span>{year} ({speakersByYear[year].length} speakers)</span>
+                    <span style={{fontSize: '20px'}}>{isCollapsed ? '▶' : '▼'}</span>
+                  </h4>
+                  {!isCollapsed && (
+                    <table style={styles.table}>
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>Name</th>
+                          <th style={styles.th}>Affiliation</th>
+                          <th style={styles.th}>Country</th>
+                          <th style={styles.th}>Date</th>
+                          <th style={styles.th}>Talk Title</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {speakersByYear[year]
+                          .sort((a, b) => {
+                            const dateA = a.assigned_date?.toDate ? a.assigned_date.toDate() : new Date(a.assigned_date);
+                            const dateB = b.assigned_date?.toDate ? b.assigned_date.toDate() : new Date(b.assigned_date);
+                            return dateA - dateB;
+                          })
+                          .map(speaker => (
+                            <tr key={speaker.id}>
+                              <td style={styles.td}>{speaker.full_name}</td>
+                              <td style={styles.td}>{speaker.affiliation}</td>
+                              <td style={styles.td}>{speaker.country || 'N/A'}</td>
+                              <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
+                              <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+      </div>
+    );
+  }
+
+/* ---------------------
+   DatesView - Updated to match AvailabilityView layout
+   --------------------- */
+   function DatesView({ dates, speakers, onAddDate, onDeleteDate, formatDate }) {
+    const getInitialMonth = () => {
+      if (dates.length === 0) return new Date();
+      const firstDate = dates[0].date?.toDate ? dates[0].date.toDate() : new Date(dates[0].date);
+      return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+    };
+    
+    const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
+  
+    const getDaysInMonth = (date) => {
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const daysInMonth = lastDay.getDate();
+      const startingDayOfWeek = firstDay.getDay();
+      
+      return { daysInMonth, startingDayOfWeek, year, month };
+    };
+  
+    const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth);
+  
+    const previousMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
+    };
+  
+    const nextMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
+    };
+  
+    const getDateInfo = (day) => {
+      const checkDate = new Date(year, month, day);
+      checkDate.setHours(0, 0, 0, 0);
+      
+      const dateEntry = dates.find(d => {
+        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        entryDate.setHours(0, 0, 0, 0);
+        return entryDate.getTime() === checkDate.getTime();
+      });
+  
+      return dateEntry;
+    };
+  
+    // Get speaker name for locked date
+    const getSpeakerForDate = (dateEntry) => {
+      if (!dateEntry.locked_by_id || dateEntry.locked_by_id === 'DELETED') return null;
+      const speaker = speakers.find(s => s.id === dateEntry.locked_by_id);
+      return speaker ? speaker.full_name : 'Unknown';
+    };
+  
+    return (
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-semibold">Available Dates</h2>
+          <button onClick={onAddDate} className="px-4 py-2 bg-primary text-white rounded hover:bg-primary/80">
+            + Add Date
+          </button>
+        </div>
+        
+        {/* Legend */}
+        <div className="flex gap-4 mb-6 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-green-500 rounded"></div>
+            <span>Available</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-red-500 rounded"></div>
+            <span>Locked (speaker assigned)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-neutral-200 rounded"></div>
+            <span>No date scheduled</span>
+          </div>
+        </div>
+  
+        {/* Two Column Layout */}
+        <div className="grid grid-cols-2 gap-6">
+          {/* Left: Calendar */}
+          <div className="border rounded-lg p-4">
+            {/* Header */}
+            <div className="flex justify-between items-center mb-4">
+              <button onClick={previousMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+                ←
+              </button>
+              <h3 className="text-base font-semibold">
+                {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </h3>
+              <button onClick={nextMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+                →
+              </button>
+            </div>
+  
+            {/* Day names */}
+            <div className="grid grid-cols-7 gap-1 mb-2">
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
+                <div key={idx} className="text-center font-semibold text-xs text-neutral-600 py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+  
+            {/* Calendar grid */}
+            <div className="grid grid-cols-7 gap-1">
+              {/* Empty cells */}
+              {Array.from({ length: startingDayOfWeek }).map((_, idx) => (
+                <div key={`empty-${idx}`} className="aspect-square"></div>
+              ))}
+  
+              {/* Days */}
+              {Array.from({ length: daysInMonth }).map((_, idx) => {
+                const day = idx + 1;
+                const dateEntry = getDateInfo(day);
+                
+                let bgColor = 'bg-neutral-100';
+                let textColor = '';
+                
+                if (dateEntry) {
+                  if (dateEntry.available) {
+                    bgColor = 'bg-green-500';
+                    textColor = 'text-white';
+                  } else {
+                    bgColor = 'bg-red-500';
+                    textColor = 'text-white';
+                  }
+                }
+  
+                return (
+                  <div
+                    key={day}
+                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${textColor}`}
+                  >
+                    {day}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+  
+          {/* Right: Scrollable List of All Dates */}
+          <div className="border rounded-lg p-4">
+            <h3 className="text-lg font-semibold mb-4">All Scheduled Dates</h3>
+            {dates.length === 0 ? (
+              <p className="text-sm text-neutral-500 text-center py-8">No dates scheduled yet.</p>
+            ) : (
+              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
+                {dates.map(d => {
+                  const speakerName = getSpeakerForDate(d);
+                  const isLocked = !d.available;
+                  
+                  return (
+                    <div key={d.id} className={`border rounded-lg p-3 ${isLocked ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <div className="font-semibold text-base">{formatDate(d.date)}</div>
+                          <div className="text-sm text-neutral-600 mt-1">
+                            <strong>Host:</strong> {d.host}
+                          </div>
+                          {d.notes && (
+                            <div className="text-xs text-neutral-500 mt-1">
+                              📍 {d.notes}
+                            </div>
+                          )}
+                          {speakerName && (
+                            <div className="text-xs text-red-700 font-semibold mt-1">
+                              🔒 Locked by: {speakerName}
+                            </div>
+                          )}
+                          {d.talk_title && (
+                            <div className="text-xs text-neutral-600 mt-1 italic">
+                              "{d.talk_title}"
+                            </div>
+                          )}
+                        </div>
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${isLocked ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                          {isLocked ? '🔒 Locked' : '✓ Available'}
                         </span>
-                      )}
-                      {isInvitationOverdue(speaker) && (
-                        <span style={{marginLeft: '8px', color: '#ff9800', fontWeight: '600'}}>⚠️</span>
-                      )}
-                    </td>
-                    <td style={styles.td}>{speaker.email}</td>
-                    <td style={styles.td}>{speaker.area_of_expertise}</td>
-                    <td style={styles.td}>{speaker.host}</td>
-                    <td style={styles.td}>{formatDate(speaker.invitation_sent_date)}</td>
-                    <td style={styles.td}>{formatDate(speaker.response_deadline)}</td>
-                    <td style={styles.td}>
-                      {(speaker.host === userRole.full_name || speaker.proposed_by_id === userRole.id) && (
+                      </div>
+                      {d.available && (
                         <button 
-                          onClick={() => onResendInvitation(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                          Resend/View
+                          onClick={() => onDeleteDate(d.id)} 
+                          className="w-full px-3 py-2 bg-red-500 text-white rounded text-sm hover:bg-red-600 transition-colors"
+                        >
+                          Delete Date
                         </button>
                       )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>Confirmed Upcoming Speakers ({acceptedSpeakers.length})</h3>
-          <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
-            Showing only upcoming speakers. View all past speakers in the "Past Speakers" tab.
-          </p>
-          {acceptedSpeakers.length === 0 ? (
-            <p style={styles.emptyText}>No confirmed upcoming speakers</p>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Talk Title</th>
-                  <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Host</th>
-                  <th style={styles.th}>Proposed By</th>
-                  <th style={styles.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {acceptedSpeakers.map(speaker => (
-                  <tr key={speaker.id} style={speaker.proposed_by_id === userRole.id ? {backgroundColor: '#f0f8ff'} : {}}>
-                    <td style={styles.td}>
-                      {speaker.full_name}
-                      {speaker.proposed_by_id === userRole.id && (
-                        <span style={{color: '#3498db', marginLeft: '8px', fontSize: '12px', fontWeight: '600'}}>
-                          (Your proposal)
-                        </span>
+                      {!d.available && (
+                        <div className="text-xs text-neutral-500 italic text-center py-2">
+                          Cannot delete locked dates
+                        </div>
                       )}
-                    </td>
-                    <td style={styles.td}>{speaker.talk_title || 'TBD'}</td>
-                    <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                    <td style={styles.td}>{speaker.host}</td>
-                    <td style={styles.td}>{speaker.proposed_by_name}</td>
-                    <td style={styles.td}>
-                      {speaker.host === userRole.full_name && (
-                        <>
-                          <button 
-                            onClick={() => onViewAgenda(speaker)}
-                            style={{...styles.actionBtn, backgroundColor: '#9b59b6'}}>
-                            Agenda
-                          </button>
-                          <button 
-                            onClick={() => onGeneratePoster(speaker)}
-                            style={{...styles.actionBtn, backgroundColor: '#16a085'}}>
-                            Poster
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div style={styles.section}>
-          <h3 style={styles.subsectionTitle}>My Proposals Summary</h3>
-          <p style={{fontSize: '16px', color: '#555'}}>
-            You have proposed <strong>{mySpeakers.length}</strong> speaker(s):
-          </p>
-          <ul style={{fontSize: '15px', color: '#555', lineHeight: '1.8'}}>
-            <li>Proposed: <strong>{mySpeakers.filter(s => s.status === 'Proposed').length}</strong></li>
-            <li>Invited (awaiting response): <strong>{mySpeakers.filter(s => s.status === 'Invited').length}</strong></li>
-            <li>Accepted: <strong>{mySpeakers.filter(s => s.status === 'Accepted').length}</strong></li>
-            <li>Declined: <strong>{mySpeakers.filter(s => s.status === 'Declined').length}</strong></li>
-          </ul>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
-  );
-};
+    );
+  }
 
-// Other View Components
-const DatesView = ({ dates, speakers, onAddDate, onDeleteDate, formatDate }) => {
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>Available Dates</h2>
-        <button onClick={onAddDate} style={styles.addBtn}>+ Add Date</button>
-      </div>
-      
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Date</th>
-            <th style={styles.th}>Talk Title</th>
-            <th style={styles.th}>Host</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>Locked By</th>
-            <th style={styles.th}>Notes</th>
-            <th style={styles.th}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {dates.map(date => {
-            const lockedSpeaker = speakers.find(s => s.id === date.locked_by_id);
-            return (
-              <tr key={date.id}>
-                <td style={styles.td}>{formatDate(date.date)}</td>
-                <td style={styles.td}>{date.talk_title || '-'}</td>
-                <td style={styles.td}>{date.host || '-'}</td>
-                <td style={styles.td}>
-                  <span style={{
-                    ...styles.badge,
-                    backgroundColor: date.available ? '#00cc00' : '#ff4444'
-                  }}>
-                    {date.available ? 'Available' : 'Locked'}
-                  </span>
-                </td>
-                <td style={styles.td}>{lockedSpeaker?.full_name || '-'}</td>
-                <td style={styles.td}>{date.notes || '-'}</td>
-                <td style={styles.td}>
-                  {date.available && (
-                    <button 
-                      onClick={() => onDeleteDate(date.id)}
-                      style={{...styles.actionBtn, ...styles.declineBtn}}>
-                      Delete
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-};
-
-const InvitationsView = ({ invitations, onCreateInvitation, formatDate }) => {
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>User Invitations</h2>
-        <button onClick={onCreateInvitation} style={styles.addBtn}>+ Create Invitation</button>
-      </div>
-      
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Email</th>
-            <th style={styles.th}>Name</th>
-            <th style={styles.th}>Affiliation</th>
-            <th style={styles.th}>Role</th>
-            <th style={styles.th}>Invited By</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>Expires</th>
-          </tr>
-        </thead>
-        <tbody>
-          {invitations.map(inv => (
-            <tr key={inv.id}>
-              <td style={styles.td}>{inv.email}</td>
-              <td style={styles.td}>{inv.full_name}</td>
-              <td style={styles.td}>{inv.affiliation || 'N/A'}</td>
-              <td style={styles.td}>{inv.role}</td>
-              <td style={styles.td}>{inv.invited_by_name}</td>
-              <td style={styles.td}>
-                <span style={{
-                  ...styles.badge,
-                  backgroundColor: inv.used ? '#999' : '#00cc00'
-                }}>
-                  {inv.used ? 'Used' : 'Active'}
-                </span>
-              </td>
-              <td style={styles.td}>{formatDate(inv.expires_at)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-};
-
-const ManageUsersView = ({ users, currentUserId, onEditUser, onDeleteUser, onPasswordReset, formatDate }) => {
-  return (
-    <div>
-      <h2 style={styles.sectionTitle}>Manage Users</h2>
-      <div style={styles.section}>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Name</th>
-              <th style={styles.th}>Email</th>
-              <th style={styles.th}>Affiliation</th>
-              <th style={styles.th}>Role</th>
-              <th style={styles.th}>Created</th>
-              <th style={styles.th}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map(user => (
-              <tr key={user.id}>
-                <td style={styles.td}>
-                  {user.full_name}
-                  {user.id === currentUserId && <span style={{color: '#3498db', marginLeft: '8px'}}>(You)</span>}
-                </td>
-                <td style={styles.td}>{user.email}</td>
-                <td style={styles.td}>{user.affiliation || 'N/A'}</td>
-                <td style={styles.td}>
-                  <span style={{
-                    ...styles.badge,
-                    backgroundColor: user.role === 'Organizer' ? '#3498db' : '#9b59b6'
-                  }}>
-                    {user.role}
-                  </span>
-                </td>
-                <td style={styles.td}>{formatDate(user.createdAt)}</td>
-                <td style={styles.td}>
-                  <button 
-                    onClick={() => onEditUser(user)}
-                    style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                    Edit
-                  </button>
-                  <button 
-                    onClick={() => onPasswordReset(user.email)}
-                    style={{...styles.actionBtn, backgroundColor: '#3498db'}}>
-                    Reset Password
-                  </button>
-                  {user.id !== currentUserId && (
-                    <button 
-                      onClick={() => onDeleteUser(user.id, user.email)}
-                      style={{...styles.actionBtn, ...styles.declineBtn}}>
-                      Remove
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpeaker, getRankingColor, getStatusColor, formatDate }) => {
-  // Filter out past speakers - only show speakers that are still in process
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  const activeSpeakers = speakers.filter(s => {
-    // Show all non-accepted speakers (Proposed, Invited, Declined)
-    if (s.status !== 'Accepted') return true;
-    
-    // For accepted speakers, only show if talk hasn't happened yet
-    if (!s.assigned_date) return true;
-    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
-    return speakerDate >= today;
-  });
-
-  return (
-    <div>
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>Propose Speaker</h2>
-        <button onClick={onAddSpeaker} style={styles.addBtn}>+ Propose New Speaker</button>
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.subsectionTitle}>My Active Speaker Proposals ({activeSpeakers.length})</h3>
-        <p style={{fontSize: '14px', color: '#666', marginBottom: '15px', fontStyle: 'italic'}}>
-          Showing only active proposals and upcoming speakers. Past speakers are not shown here.
-        </p>
-        {activeSpeakers.length === 0 ? (
-          <p style={styles.emptyText}>You haven't proposed any active speakers</p>
-        ) : (
-          <table style={styles.table}>
+/* ---------------------
+   ManageUsersView
+   --------------------- */
+   function ManageUsersView({ users, currentUserId, onEditUser, onDeleteUser, onPasswordReset, formatDate }) {
+    return (
+      <div className="bg-white rounded shadow p-4">
+        <h2 className="text-lg font-medium mb-3">Manage Users</h2>
+        {users.length === 0 ? <p className="text-sm text-neutral-500">No users found.</p> : (
+          <table className="w-full text-sm">
             <thead>
               <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Affiliation</th>
-                <th style={styles.th}>Country</th>
-                <th style={styles.th}>Expertise</th>
-                <th style={styles.th}>Ranking</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>Date</th>
-                <th style={styles.th}>Notes</th>
-                <th style={styles.th}>Actions</th>
+                <th className="py-2">Email</th>
+                <th className="py-2">Name</th>
+                <th className="py-2">Role</th>
+                <th className="py-2">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {activeSpeakers.map(speaker => (
-                <tr key={speaker.id}>
-                  <td style={styles.td}>{speaker.full_name}</td>
-                  <td style={styles.td}>{speaker.email}</td>
-                  <td style={styles.td}>{speaker.affiliation}</td>
-                  <td style={styles.td}>{speaker.country || 'N/A'}</td>
-                  <td style={styles.td}>{speaker.area_of_expertise}</td>
-                  <td style={styles.td}>
-                    <span style={{
-                      ...styles.badge,
-                      backgroundColor: getRankingColor(speaker.ranking)
-                    }}>
-                      {speaker.ranking}
-                    </span>
-                  </td>
-                  <td style={styles.td}>
-                    <span style={{
-                      ...styles.badge,
-                      backgroundColor: getStatusColor(speaker.status)
-                    }}>
-                      {speaker.status}
-                    </span>
-                  </td>
-                  <td style={styles.td}>{formatDate(speaker.assigned_date)}</td>
-                  <td style={styles.td}>{speaker.notes}</td>
-                  <td style={styles.td}>
-                    {speaker.status === 'Proposed' && (
-                      <>
-                        <button 
-                          onClick={() => onEditSpeaker(speaker)}
-                          style={{...styles.actionBtn, backgroundColor: '#f39c12'}}>
-                          Edit
-                        </button>
-                        <button 
-                          onClick={() => onDeleteSpeaker(speaker.id)}
-                          style={{...styles.actionBtn, ...styles.declineBtn}}>
-                          Delete
-                        </button>
-                      </>
-                    )}
-                    {speaker.status !== 'Proposed' && (
-                      <em style={{color: '#999', fontSize: '13px'}}>
-                        {speaker.status === 'Invited' && 'Awaiting response'}
-                        {speaker.status === 'Accepted' && 'Confirmed'}
-                        {speaker.status === 'Declined' && 'Declined'}
-                      </em>
-                    )}
+              {users.map(u => (
+                <tr key={u.id} className="border-t">
+                  <td className="py-2">{u.email}</td>
+                  <td className="py-2">{u.full_name}</td>
+                  <td className="py-2">{u.role}</td>
+                  <td className="py-2 space-x-2">
+                    <button onClick={() => onEditUser(u)} className="px-2 py-1 bg-yellow-500 text-white rounded text-xs">Edit</button>
+                    <button onClick={() => onPasswordReset(u.email, u.full_name)} className="px-2 py-1 bg-sky-600 text-white rounded text-xs">Reset PW</button>
+                    {u.id !== currentUserId && <button onClick={() => onDeleteUser(u.id, u.email)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">Remove</button>}
                   </td>
                 </tr>
               ))}
@@ -4064,361 +3017,1348 @@ const ProposeSpeakerView = ({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpe
           </table>
         )}
       </div>
+    );
+  }
+
+/* ---------------------
+   InvitationsView
+   --------------------- */
+function InvitationsView({ invitations, onCreateInvitation, formatDate }) {
+  return (
+    <div className="bg-white rounded shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-medium">User Invitations</h2>
+        <button onClick={onCreateInvitation} className="px-3 py-1 bg-primary text-white rounded">Create Invitation</button>
+      </div>
+      {invitations.length === 0 ? <p className="text-sm text-neutral-500">No invitations.</p> : (
+        <ul className="space-y-2">
+          {invitations.map(inv => (
+            <li key={inv.id} className="flex items-center justify-between border rounded p-3">
+              <div>
+                <div className="font-semibold">{inv.full_name}</div>
+                <div className="text-sm text-neutral-600">{inv.email} • Expires {formatDate(inv.expires_at)}</div>
+              </div>
+              <div className="text-sm text-neutral-500">{inv.used ? 'Used' : 'Pending'}</div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
-};
+}
 
-// Login Component
-const LoginView = ({ onLogin }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onLogin(email, password);
-  };
-
+/* ---------------------
+   ProposeSpeakerView
+   --------------------- */
+function ProposeSpeakerView({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpeaker, getRankingColor, getStatusColor, formatDate }) {
   return (
-    <div style={styles.loginContainer}>
-      <div style={styles.loginBox}>
-        <h2 style={styles.loginTitle}>Seminar Management Login</h2>
-        <form onSubmit={handleSubmit} style={styles.loginForm}>
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={styles.input}
-            required
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
-            required
-          />
-          <button type="submit" style={styles.submitBtn}>Login</button>
-        </form>
+    <div className="bg-white rounded shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-medium">My Proposals</h2>
+        <button onClick={onAddSpeaker} className="px-3 py-1 bg-primary text-white rounded">Propose Speaker</button>
+      </div>
+      {speakers.length === 0 ? <p className="text-sm text-neutral-500">You have not proposed any speakers.</p> : (
+        <div className="space-y-2">
+          {speakers.map(s => (
+            <div key={s.id} className="border rounded p-3 flex justify-between">
+              <div>
+                <div className="font-semibold">{s.full_name}</div>
+                <div className="text-sm text-neutral-600">{s.area_of_expertise} • {s.affiliation}</div>
+                <div className="text-xs mt-1"><span className="font-medium">Status:</span> <span className={getStatusColor(s.status)}>{s.status}</span></div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <button onClick={() => onEditSpeaker(s)} className="px-2 py-1 bg-yellow-500 text-white rounded text-xs">Edit</button>
+                <button onClick={() => onDeleteSpeaker(s.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------
+   ProfileView
+   --------------------- */
+function ProfileView({ userRole, onEditProfile }) {
+  return (
+    <div className="bg-white rounded shadow p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-medium">My Profile</h2>
+        <button onClick={onEditProfile} className="px-3 py-1 bg-primary text-white rounded">Edit Profile</button>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="text-sm text-neutral-500">Email</div>
+          <div className="font-semibold">{userRole?.email}</div>
+        </div>
+        <div>
+          <div className="text-sm text-neutral-500">Name</div>
+          <div className="font-semibold">{userRole?.full_name}</div>
+        </div>
+        <div>
+          <div className="text-sm text-neutral-500">Affiliation</div>
+          <div className="font-semibold">{userRole?.affiliation}</div>
+        </div>
+        <div>
+          <div className="text-sm text-neutral-500">Role</div>
+          <div className="font-semibold">{userRole?.role}</div>
+        </div>
       </div>
     </div>
   );
-};
+}
 
-// Signup Component
-const SignupView = ({ invitation, onSignup }) => {
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+/* ============================================================
+   Sidebars & Forms (modals)
+   - ActionsSidebar, AgendaSidebar, PosterSidebar
+   - AddDateForm, AddSpeakerForm, AddPastSpeakerForm, Edit forms
+   ============================================================ */
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+   function ActionsSidebar({ speaker, onClose, onUpdateAction, onAddAction, currentUser, formatDate }) {
+    const [collapsedCards, setCollapsedCards] = useState(new Set());
     
-    if (password.length < 6) {
-      alert('Password must be at least 6 characters long');
-      return;
-    }
+    const inviteLink = `${window.location.origin}?token=${speaker.access_token}`;
+    const emailSubject = 'Invitation to Present at Collaboratorium Barcelona';
+    const emailBody = `Dear ${speaker.full_name},
+  
+  We are delighted to invite you to present a seminar at the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona.
+  
+  Your host will be ${speaker.host}.
+  
+  Please visit the following link to accept and choose your preferred date:
+  ${inviteLink}
+  
+  This invitation will remain valid for 7 days. If you have any questions, please don't hesitate to reach out.
+  
+  Best regards,
+  ${currentUser.full_name}`;
+  
+    const actions = speaker.actions || [];
     
-    if (password !== confirmPassword) {
-      alert('Passwords do not match');
-      return;
-    }
+    // Toggle card collapse state
+    const toggleCard = (cardId) => {
+      setCollapsedCards(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(cardId)) {
+          newSet.delete(cardId);
+        } else {
+          newSet.add(cardId);
+        }
+        return newSet;
+      });
+    };
     
-    onSignup(password);
-  };
-
-  return (
-    <div style={styles.loginContainer}>
-      <div style={styles.loginBox}>
-        <h2 style={styles.loginTitle}>Create Your Account</h2>
-        <p style={styles.signupWelcome}>
-          Welcome, <strong>{invitation.full_name}</strong>!
-        </p>
-        <p style={styles.signupInfo}>
-          You've been invited to join as a <strong>{invitation.role}</strong>.
-          <br />
-          Please create a password to complete your registration.
-        </p>
-        <form onSubmit={handleSubmit} style={styles.loginForm}>
-          <input
-            type="email"
-            value={invitation.email}
-            disabled
-            style={{...styles.input, backgroundColor: '#f5f5f5', color: '#666'}}
-          />
-          <input
-            type="password"
-            placeholder="Create Password (min 6 characters)"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
-            required
-            minLength={6}
-          />
-          <input
-            type="password"
-            placeholder="Confirm Password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            style={styles.input}
-            required
-          />
-          <button type="submit" style={styles.submitBtn}>Create Account</button>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Calendar Date Picker Component
-const CalendarDatePicker = ({ availableDates, selectedDate, onSelectDate, formatDate }) => {
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-
-  const getDaysInMonth = (date) => {
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
-
-    const days = [];
-    for (let i = 0; i < startingDayOfWeek; i++) {
-      days.push(null);
-    }
-    for (let day = 1; day <= daysInMonth; day++) {
-      days.push(new Date(year, month, day));
-    }
-    return days;
-  };
-
-  const isDateAvailable = (date) => {
-    if (!date) return false;
-    const dateString = date.toISOString().split('T')[0];
-    return availableDates.some(d => {
-      if (!d.available || d.locked_by_id === 'DELETED') return false;
-      try {
-        const availDate = d.date.toDate ? d.date.toDate() : new Date(d.date);
-        if (isNaN(availDate.getTime())) return false;
-        return availDate.toISOString().split('T')[0] === dateString;
-      } catch (e) {
-        return false;
+    const isCardCollapsed = (cardId) => collapsedCards.has(cardId);
+    
+    // Check if invitation is overdue
+    const isInvitationOverdue = () => {
+      if (speaker.status !== 'Invited' || !speaker.response_deadline) return false;
+      const deadline = speaker.response_deadline.toDate ? speaker.response_deadline.toDate() : new Date(speaker.response_deadline);
+      return deadline < new Date();
+    };
+    
+    const getActionIcon = (type) => {
+      switch(type) {
+        case 'invitation_drafted': return <Mail size={20} />;
+        case 'speaker_responded': return <CheckCircle size={20} />;
+        case 'travel_arrangements': return <Plane size={20} />;
+        default: return <CheckCircle size={20} />;
       }
-    });
-  };
-
-  const getDateInfo = (date) => {
-    if (!date) return null;
-    const dateString = date.toISOString().split('T')[0];
-    return availableDates.find(d => {
-      if (!d.available || d.locked_by_id === 'DELETED') return false;
-      try {
-        const availDate = d.date.toDate ? d.date.toDate() : new Date(d.date);
-        if (isNaN(availDate.getTime())) return false;
-        return availDate.toISOString().split('T')[0] === dateString;
-      } catch (e) {
-        return false;
+    };
+  
+    const getActionTitle = (type) => {
+      switch(type) {
+        case 'invitation_drafted': return 'Invitation Email';
+        case 'speaker_responded': return 'Speaker Response';
+        case 'travel_arrangements': return 'Travel Arrangements';
+        default: return 'Action';
       }
-    });
-  };
+    };
+  
+    const getActionContent = (action) => {
+      if (action.type === 'speaker_responded') {
+        return (
+          <div style={styles.actionCardContent}>
+            <p style={{margin: '8px 0', color: action.action === 'accepted' ? '#27ae60' : '#e74c3c', fontWeight: '600'}}>
+              Speaker {action.action === 'accepted' ? 'accepted' : 'declined'} the invitation
+            </p>
+          </div>
+        );
+      }
+      
+      if (action.type === 'travel_arrangements') {
+        const seminarDate = speaker.assigned_date ? formatDate(speaker.assigned_date) : '[seminar date]';
+        const travelEmailBody = `Dear ${speaker.full_name},
+  
+  I hope this email finds you well.
+  We are delighted that you will be giving a seminar at the Barcelona Collaboratorium on ${seminarDate}.
+  
+  To start organizing your trip, could you please confirm your dates of stay in Barcelona? Once we have this information, we will send you an invitation to our TravelPerk platform, where you will book your flights and hotel. Please note that the TravelPerk invitation link expires in 24 hours, so it's best to complete the registration shortly after receiving it.
+  
+  Additionally, to announce your seminar internally and on our website, we would kindly ask you to send us a title and a brief abstract of your talk when convenient.
+  
+  We will schedule one-to-one meetings (30 minutes each) with you on Thursday after the seminar, for people who express interest.
+  
+  Don't hesitate to reach out if you have any questions regarding the logistics or your presentation.
+  
+  We look forward to welcoming you in Barcelona.
+  
+  Best regards,
+  ${currentUser.full_name}`;
+  
+        return (
+          <div style={styles.actionCardContent}>
+            <p style={styles.emailLabel}>To: {speaker.email}</p>
+            <p style={styles.emailLabel}>Subject: Travel Arrangements - Barcelona Collaboratorium Seminar</p>
+            <div style={styles.emailBody}>
+              {travelEmailBody.split('\n').map((line, i) => (
+                <p key={i} style={{margin: '8px 0'}}>{line}</p>
+              ))}
+            </div>
+            <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
+              <button
+                onClick={() => {
+                  const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent('Travel Arrangements - Barcelona Collaboratorium Seminar')}&body=${encodeURIComponent(travelEmailBody)}`;
+                  window.location.href = mailtoLink;
+                }}
+                style={styles.sendEmailBtn}
+              >
+                <Send size={16} style={{marginRight: '6px'}} />
+                Open in Email Client
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      await navigator.clipboard.writeText(travelEmailBody);
+                      alert('Message copied to clipboard!');
+                    } else {
+                      const textArea = document.createElement('textarea');
+                      textArea.value = travelEmailBody;
+                      textArea.style.position = 'fixed';
+                      textArea.style.left = '-999999px';
+                      document.body.appendChild(textArea);
+                      textArea.select();
+                      try {
+                        document.execCommand('copy');
+                        alert('Message copied to clipboard!');
+                      } catch (err) {
+                        alert('Failed to copy text. Please copy manually.');
+                      }
+                      document.body.removeChild(textArea);
+                    }
+                  } catch (err) {
+                    console.error('Copy failed:', err);
+                    alert('Failed to copy text. Please copy manually.');
+                  }
+                }}
+                style={{...styles.sendEmailBtn, backgroundColor: '#9b59b6'}}
+              >
+                📋 Copy Text
+              </button>
+            </div>
+          </div>
+        );
+      }
+  
+      return null;
+    };
+  
+    return (
+      <div style={styles.sidebar}>
+        <div style={{
+          padding: '20px',
+          borderBottom: '2px solid #e0e0e0',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          backgroundColor: '#f8f9fa',
+        }}>
+          <h3 style={{
+            margin: 0,
+            fontSize: '20px',
+            color: '#2c3e50',
+            fontWeight: '600'
+          }}>Actions - {speaker.full_name}</h3>
+          <button 
+            onClick={onClose} 
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#666',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <X size={24} />
+          </button>
+        </div>
 
-  const days = getDaysInMonth(currentMonth);
-  const monthName = currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-  const handlePrevMonth = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
-  };
-
-  const handleNextMonth = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
-  };
-
-  return (
-    <div style={styles.calendar}>
-      <div style={styles.calendarHeader}>
-        <button 
-          type="button"
-          onClick={handlePrevMonth}
-          style={styles.calendarNavBtn}
-        >
-          ◀
-        </button>
-        <h4 style={styles.calendarMonth}>{monthName}</h4>
-        <button 
-          type="button"
-          onClick={handleNextMonth}
-          style={styles.calendarNavBtn}
-        >
-          ▶
-        </button>
-      </div>
-      <div style={styles.calendarGrid}>
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-          <div key={day} style={styles.calendarDayName}>{day}</div>
-        ))}
-        {days.map((date, index) => {
-          if (!date) return <div key={`empty-${index}`} style={styles.calendarDayEmpty} />;
-          
-          const available = isDateAvailable(date);
-          const dateInfo = getDateInfo(date);
-          const isSelected = selectedDate && dateInfo &&
-            dateInfo.id === selectedDate;
-
-          return (
-            <div
-              key={date.toISOString()}
-              onClick={() => available && onSelectDate(dateInfo.id)}
-              style={{
-                ...styles.calendarDay,
-                ...(available ? styles.calendarDayAvailable : {}),
-                ...(isSelected ? styles.calendarDaySelected : {}),
-                cursor: available ? 'pointer' : 'default'
-              }}
-              title={available && dateInfo ? `${formatDate(dateInfo.date)} - ${dateInfo.host}${dateInfo.notes ? ' - ' + dateInfo.notes : ''}` : ''}
+        <div style={styles.sidebarContent}>
+          <div style={styles.sidebarSection}>
+            <p style={styles.sidebarText}><strong>Status:</strong> {speaker.status}</p>
+            <p style={styles.sidebarText}><strong>Email:</strong> {speaker.email}</p>
+            <p style={styles.sidebarText}><strong>Host:</strong> {speaker.host}</p>
+            {speaker.assigned_date && (
+              <p style={styles.sidebarText}><strong>Date:</strong> {formatDate(speaker.assigned_date)}</p>
+            )}
+          </div>
+  
+          <div style={styles.sidebarSection}>
+            <h4 style={styles.sidebarSectionTitle}>Actions</h4>
+            
+            {isInvitationOverdue() && (
+              <div style={{...styles.actionCard, backgroundColor: '#fff3cd', borderLeft: '4px solid #ff9800'}}>
+                <div 
+                  style={{...styles.actionCardHeader, cursor: 'pointer'}}
+                  onClick={() => toggleCard('overdue')}
+                >
+                  <div style={{...styles.actionCardTitle, color: '#ff9800'}}>
+                    <Mail size={20} />
+                    <span style={{marginLeft: '8px'}}>⚠️ No Response from Speaker</span>
+                  </div>
+                  <span style={{fontSize: '18px', color: '#ff9800'}}>
+                    {isCardCollapsed('overdue') ? '▼' : '▲'}
+                  </span>
+                </div>
+                {!isCardCollapsed('overdue') && (
+                  <div style={styles.actionCardContent}>
+                    <p style={{margin: '8px 0', fontSize: '13px', color: '#856404'}}>
+                      The speaker has not responded to the initial invitation sent on {formatDate(speaker.invitation_sent_date)}.
+                      The deadline was {formatDate(speaker.response_deadline)}.
+                    </p>
+                    <p style={{margin: '8px 0', fontSize: '13px', color: '#856404', fontWeight: '600'}}>
+                      Consider resending the invitation or following up directly.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {actions.map((action, index) => {
+              const cardId = `action-${index}`;
+              const isCollapsed = isCardCollapsed(cardId);
+              
+              return (
+                <div key={index} style={styles.actionCard}>
+                  <div 
+                    style={{...styles.actionCardHeader, cursor: 'pointer'}}
+                    onClick={() => toggleCard(cardId)}
+                  >
+                    <div style={styles.actionCardTitle}>
+                      {getActionIcon(action.type)}
+                      <span style={{marginLeft: '8px'}}>{getActionTitle(action.type)}</span>
+                    </div>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                      <input
+                        type="checkbox"
+                        checked={action.completed}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          onUpdateAction(speaker.id, index, e.target.checked);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={styles.checkbox}
+                      />
+                      <span style={{fontSize: '18px', color: '#666'}}>
+                        {isCollapsed ? '▼' : '▲'}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {!isCollapsed && (
+                    <>
+                      {action.type === 'invitation_drafted' && (
+                        <div style={styles.actionCardContent}>
+                          <p style={styles.emailLabel}>To: {speaker.email}</p>
+                          <p style={styles.emailLabel}>Subject: {emailSubject}</p>
+                          <div style={styles.emailBody}>
+                            {emailBody.split('\n').map((line, i) => (
+                              <p key={i} style={{margin: '8px 0'}}>{line}</p>
+                            ))}
+                          </div>
+                          <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
+                            <button
+                              onClick={() => {
+                                const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+                                window.location.href = mailtoLink;
+                              }}
+                              style={styles.sendEmailBtn}
+                            >
+                              <Send size={16} style={{marginRight: '6px'}} />
+                              Open in Email Client
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    await navigator.clipboard.writeText(emailBody);
+                                    alert('Message copied to clipboard!');
+                                  } else {
+                                    const textArea = document.createElement('textarea');
+                                    textArea.value = emailBody;
+                                    textArea.style.position = 'fixed';
+                                    textArea.style.left = '-999999px';
+                                    document.body.appendChild(textArea);
+                                    textArea.select();
+                                    try {
+                                      document.execCommand('copy');
+                                      alert('Message copied to clipboard!');
+                                    } catch (err) {
+                                      alert('Failed to copy text. Please copy manually.');
+                                    }
+                                    document.body.removeChild(textArea);
+                                  }
+                                } catch (err) {
+                                  console.error('Copy failed:', err);
+                                  alert('Failed to copy text. Please copy manually.');
+                                }
+                              }}
+                              style={{...styles.sendEmailBtn, backgroundColor: '#9b59b6'}}
+                            >
+                              📋 Copy Text
+                            </button>
+                          </div>
+                        </div>
+                      )}
+  
+                      {getActionContent(action)}
+                      
+                      <p style={styles.actionTimestamp}>
+                        {action.user} - {new Date(action.timestamp).toLocaleString()}
+                      </p>
+                      {action.completed && action.completedAt && (
+                        <p style={styles.actionCompleted}>
+                          ✓ Completed on {new Date(action.completedAt).toLocaleString()}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+  
+          {speaker.status === 'Accepted' && !actions.some(a => a.type === 'travel_arrangements') && (
+            <button
+              onClick={() => onAddAction(speaker.id, 'travel_arrangements')}
+              style={styles.addActionBtn}
             >
-              {date.getDate()}
+              + Add Travel Arrangements Card
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+/* ---------------------
+   AgendaSidebar - Google Calendar style
+   --------------------- */
+   function AgendaSidebar({ 
+    agenda, 
+    onClose, 
+    onAddMeeting, 
+    onDeleteMeeting, 
+    showAddMeetingForm,
+    onSubmitMeeting,
+    onCancelMeeting,
+    selectedTimeSlot,
+    onSelectTimeSlot,
+    formatDate,
+    currentUser
+  }) {
+    const [shareMenuOpen, setShareMenuOpen] = useState(false);
+    
+    // Get the three days (day before, talk day, day after)
+    const seminarDate = agenda.seminar_date?.toDate ? agenda.seminar_date.toDate() : new Date(agenda.seminar_date);
+    const startDate = agenda.start_date?.toDate ? agenda.start_date.toDate() : new Date(agenda.start_date);
+    const endDate = agenda.end_date?.toDate ? agenda.end_date.toDate() : new Date(agenda.end_date);
+    
+    const days = [startDate, seminarDate, endDate];
+    
+    // Generate time slots from 8am to 8pm
+    const timeSlots = [];
+    for (let hour = 8; hour <= 20; hour++) {
+      timeSlots.push(`${hour.toString().padStart(2, '0')}:00`);
+      if (hour < 20) timeSlots.push(`${hour.toString().padStart(2, '0')}:30`);
+    }
+    
+    // Get meetings for a specific time slot
+    const getMeetingsForSlot = (day, timeSlot) => {
+      return (agenda.meetings || []).filter(meeting => {
+        const meetingDate = meeting.date?.toDate ? meeting.date.toDate() : new Date(meeting.date);
+        const meetingStart = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
+        
+        const slotHour = parseInt(timeSlot.split(':')[0]);
+        const slotMinute = parseInt(timeSlot.split(':')[1]);
+        
+        // Check if meeting is on this day and overlaps with this time slot
+        if (meetingDate.toDateString() === day.toDateString()) {
+          const meetingHour = meetingStart.getHours();
+          const meetingMinute = meetingStart.getMinutes();
+          
+          return meetingHour === slotHour && meetingMinute === slotMinute;
+        }
+        return false;
+      });
+    };
+    
+    const getMeetingColor = (type) => {
+      switch(type) {
+        case 'seminar': return '#d63447';
+        case 'meeting': return '#3498db';
+        case 'social': return '#27ae60';
+        default: return '#9b59b6';
+      }
+    };
+    
+    const formatTimeSlot = (meeting) => {
+      const start = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
+      const end = meeting.end_time?.toDate ? meeting.end_time.toDate() : new Date(meeting.end_time);
+      return `${start.getHours()}:${start.getMinutes().toString().padStart(2, '0')} - ${end.getHours()}:${end.getMinutes().toString().padStart(2, '0')}`;
+    };
+    
+    const handleTimeSlotClick = (day, time) => {
+      if (showAddMeetingForm) return;
+      onSelectTimeSlot({ day, time });
+      onAddMeeting();
+    };
+    
+    // Generate iCal file for download
+    const generateICalFile = () => {
+      const icsLines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Collaboratorium Barcelona//Seminar//EN',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'X-WR-CALNAME:' + agenda.speaker_name + ' Visit',
+        'X-WR-TIMEZONE:Europe/Madrid'
+      ];
+      
+      (agenda.meetings || []).forEach(meeting => {
+        const start = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
+        const end = meeting.end_time?.toDate ? meeting.end_time.toDate() : new Date(meeting.end_time);
+        
+        const formatICalDate = (date) => {
+          return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+        };
+        
+        icsLines.push('BEGIN:VEVENT');
+        icsLines.push('UID:' + Math.random().toString(36).substring(7) + '@collaboratorium.barcelona');
+        icsLines.push('DTSTAMP:' + formatICalDate(new Date()));
+        icsLines.push('DTSTART:' + formatICalDate(start));
+        icsLines.push('DTEND:' + formatICalDate(end));
+        icsLines.push('SUMMARY:' + meeting.title);
+        if (meeting.location) icsLines.push('LOCATION:' + meeting.location);
+        if (meeting.notes) icsLines.push('DESCRIPTION:' + meeting.notes.replace(/\n/g, '\\n'));
+        if (meeting.attendees && meeting.attendees.length > 0) {
+          meeting.attendees.forEach(attendee => {
+            icsLines.push('ATTENDEE:mailto:' + attendee);
+          });
+        }
+        icsLines.push('END:VEVENT');
+      });
+      
+      icsLines.push('END:VCALENDAR');
+      
+      const icsContent = icsLines.join('\r\n');
+      const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${agenda.speaker_name.replace(/\s+/g, '_')}_Visit.ics`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+    
+    return (
+      <div style={styles.agendaSidebar}>
+        <div style={{
+          padding: '20px',
+          borderBottom: '2px solid #e0e0e0',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          backgroundColor: '#f8f9fa',
+        }}>
+          <div>
+            <h3 style={{
+              margin: 0,
+              fontSize: '20px',
+              color: '#2c3e50',
+              fontWeight: '600'
+            }}>Agenda - {agenda.speaker_name}</h3>
+            <p style={{fontSize: '13px', color: '#666', margin: '4px 0 0 0'}}>
+              {formatDate(seminarDate)}
+            </p>
+          </div>
+          <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+            <div style={{position: 'relative'}}>
+              <button 
+                onClick={() => setShareMenuOpen(!shareMenuOpen)}
+                style={{
+                  padding: '8px 12px',
+                  backgroundColor: '#27ae60',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Send size={16} />
+                Share
+              </button>
+              
+              {shareMenuOpen && (
+                <div style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '5px',
+                  backgroundColor: 'white',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                  zIndex: 100,
+                  minWidth: '200px'
+                }}>
+                  <button
+                    onClick={() => {
+                      generateICalFile();
+                      setShareMenuOpen(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '10px 15px',
+                      textAlign: 'left',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      borderBottom: '1px solid #eee'
+                    }}
+                  >
+                    📥 Download .ics file
+                  </button>
+                  <button
+                    onClick={() => {
+                      const email = prompt('Enter speaker email to send calendar:');
+                      if (email) {
+                        const subject = `Calendar for your visit to Barcelona`;
+                        const body = `Please find attached your visit calendar. You can import the attached .ics file into your calendar application (Google Calendar, Outlook, etc.).\n\nLooking forward to your visit!\n\nBest regards,\n${currentUser.full_name}`;
+                        window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                      }
+                      setShareMenuOpen(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '10px 15px',
+                      textAlign: 'left',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >
+                    📧 Email to speaker
+                  </button>
+                </div>
+              )}
             </div>
-          );
-        })}
+            <button 
+              onClick={onClose} 
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: '#666',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              <X size={24} />
+            </button>
+          </div>
+        </div>
+  
+        <div style={styles.calendarContainer}>
+          {/* Day headers */}
+          <div style={styles.calendarDaysHeader}>
+            <div style={styles.calendarTimeColumn}></div>
+            {days.map((day, idx) => (
+              <div key={idx} style={styles.calendarDayHeader}>
+                <div style={styles.agendaCalendarDayName}>
+                  {day.toLocaleDateString('en-US', { weekday: 'short' })}
+                </div>
+                <div style={styles.calendarDayDate}>
+                  {day.getDate()}
+                </div>
+              </div>
+            ))}
+          </div>
+  
+          {/* Time slots grid */}
+          <div style={styles.agendaCalendarGrid}>
+            {timeSlots.map((timeSlot, timeIdx) => (
+              <React.Fragment key={timeIdx}>
+                {/* Time label */}
+                <div style={styles.timeSlotLabel}>{timeSlot}</div>
+                
+                {/* Day cells */}
+                {days.map((day, dayIdx) => {
+                  const meetings = getMeetingsForSlot(day, timeSlot);
+                  const isClickable = currentUser.role === 'Organizer' || agenda.host === currentUser.full_name;
+                  
+                  return (
+                    <div
+                      key={dayIdx}
+                      style={{
+                        ...styles.timeSlotCell,
+                        backgroundColor: isClickable ? 'transparent' : '#f9f9f9',
+                        cursor: isClickable ? 'pointer' : 'default'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (isClickable && meetings.length === 0) {
+                          e.currentTarget.style.backgroundColor = '#e3f2fd';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (isClickable) {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }
+                      }}
+                      onClick={() => isClickable && meetings.length === 0 && handleTimeSlotClick(day, timeSlot)}
+                    >
+                      {meetings.map((meeting, meetingIdx) => (
+                        <div
+                          key={meetingIdx}
+                          style={{
+                            ...styles.calendarMeeting,
+                            backgroundColor: getMeetingColor(meeting.type)
+                          }}
+                        >
+                          <div style={styles.calendarMeetingTitle}>
+                            {meeting.title}
+                          </div>
+                          <div style={styles.calendarMeetingTime}>
+                            {formatTimeSlot(meeting)}
+                          </div>
+                          {meeting.location && (
+                            <div style={{fontSize: '10px', marginTop: '2px'}}>
+                              📍 {meeting.location}
+                            </div>
+                          )}
+                          {!meeting.is_locked && isClickable && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const meetingIndex = agenda.meetings.findIndex(m => m === meeting);
+                                onDeleteMeeting(meetingIndex);
+                              }}
+                              style={styles.deleteMeetingBtn}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+  
+        {/* Agenda info footer */}
+        <div style={styles.agendaInfo}>
+          <div style={{fontSize: '13px', color: '#666'}}>
+            <strong>Host:</strong> {agenda.host} | <strong>Speaker:</strong> {agenda.speaker_email}
+          </div>
+          {(currentUser.role === 'Organizer' || agenda.host === currentUser.full_name) && (
+            <button
+              onClick={onAddMeeting}
+              style={{
+                marginTop: '10px',
+                padding: '8px 12px',
+                backgroundColor: '#3498db',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                width: '100%'
+              }}
+            >
+              + Add Meeting
+            </button>
+          )}
+        </div>
+  
+        {/* Add meeting form overlay */}
+        {showAddMeetingForm && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}>
+            <div style={{
+              backgroundColor: 'white',
+              padding: '30px',
+              borderRadius: '8px',
+              width: '90%',
+              maxWidth: '500px',
+              maxHeight: '80vh',
+              overflowY: 'auto'
+            }}>
+              <AddMeetingFormInline
+                onSubmit={onSubmitMeeting}
+                onCancel={onCancelMeeting}
+                selectedTimeSlot={selectedTimeSlot}
+                seminarDate={seminarDate}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  
+  /* ---------------------
+     AddMeetingFormInline - used within AgendaSidebar
+     --------------------- */
+  function AddMeetingFormInline({ onSubmit, onCancel, selectedTimeSlot, seminarDate }) {
+    const initialDate = selectedTimeSlot?.day 
+      ? selectedTimeSlot.day.toISOString().split('T')[0]
+      : seminarDate.toISOString().split('T')[0];
+      
+    const initialStartTime = selectedTimeSlot?.time || '10:00';
+    
+    // Calculate end time (30 minutes after start)
+    const calculateEndTime = (startTime) => {
+      const [hours, minutes] = startTime.split(':').map(Number);
+      const totalMinutes = hours * 60 + minutes + 30;
+      const endHours = Math.floor(totalMinutes / 60);
+      const endMinutes = totalMinutes % 60;
+      return `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+    };
+    
+    const [form, setForm] = useState({ 
+      title: '', 
+      type: 'meeting', 
+      date: initialDate, 
+      start_time: initialStartTime, 
+      end_time: calculateEndTime(initialStartTime), 
+      location: '', 
+      attendees: '', 
+      notes: '' 
+    });
+    
+    const submit = (e) => { 
+      e.preventDefault(); 
+      onSubmit(form); 
+    };
+    
+    return (
+      <form onSubmit={submit} className="space-y-3">
+        <h3 style={{fontSize: '20px', fontWeight: '600', marginBottom: '15px'}}>Add Meeting</h3>
+        
+        <div>
+          <label className="block text-sm font-medium mb-1">Title *</label>
+          <input 
+            className="w-full border rounded px-3 py-2" 
+            placeholder="Meeting title" 
+            value={form.title} 
+            onChange={e => setForm({ ...form, title: e.target.value })} 
+            required 
+          />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-medium mb-1">Type</label>
+          <select 
+            className="w-full border rounded px-3 py-2" 
+            value={form.type} 
+            onChange={e => setForm({ ...form, type: e.target.value })}
+          >
+            <option value="meeting">Meeting</option>
+            <option value="social">Social</option>
+            <option value="seminar">Seminar</option>
+          </select>
+        </div>
+        
+        <div className="grid grid-cols-3 gap-2">
+          <div>
+            <label className="block text-sm font-medium mb-1">Date *</label>
+            <input 
+              type="date" 
+              className="w-full border rounded px-3 py-2" 
+              value={form.date} 
+              onChange={e => setForm({ ...form, date: e.target.value })} 
+              required 
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Start *</label>
+            <input 
+              type="time" 
+              className="w-full border rounded px-3 py-2" 
+              value={form.start_time} 
+              onChange={e => {
+                const newStartTime = e.target.value;
+                setForm({ 
+                  ...form, 
+                  start_time: newStartTime,
+                  end_time: calculateEndTime(newStartTime)
+                });
+              }} 
+              required 
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">End *</label>
+            <input 
+              type="time" 
+              className="w-full border rounded px-3 py-2" 
+              value={form.end_time} 
+              onChange={e => setForm({ ...form, end_time: e.target.value })} 
+              required 
+            />
+          </div>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-medium mb-1">Location</label>
+          <input 
+            className="w-full border rounded px-3 py-2" 
+            placeholder="Meeting location" 
+            value={form.location} 
+            onChange={e => setForm({ ...form, location: e.target.value })} 
+          />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-medium mb-1">Attendees (comma-separated emails)</label>
+          <input 
+            className="w-full border rounded px-3 py-2" 
+            placeholder="email1@example.com, email2@example.com" 
+            value={form.attendees} 
+            onChange={e => setForm({ ...form, attendees: e.target.value })} 
+          />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-medium mb-1">Notes</label>
+          <textarea 
+            className="w-full border rounded px-3 py-2" 
+            placeholder="Additional notes" 
+            value={form.notes} 
+            onChange={e => setForm({ ...form, notes: e.target.value })} 
+            rows={3}
+          />
+        </div>
+        
+        <div className="flex justify-end gap-2 mt-4">
+          <button type="button" onClick={onCancel} className="px-4 py-2 border rounded">Cancel</button>
+          <button type="submit" className="px-4 py-2 bg-primary text-white rounded">Save Meeting</button>
+        </div>
+      </form>
+    );
+  }
+
+/* ---------------------
+   PosterSidebar (simplified)
+   --------------------- */
+function PosterSidebar({ speaker, onClose, formatDate, allUsers }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg font-medium">Poster - {speaker.full_name}</h3>
+        <button onClick={onClose} className="text-neutral-500"><X /></button>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <div className="font-semibold">Title</div>
+          <div className="text-sm text-neutral-600">{speaker.talk_title || '(TBC)'}</div>
+        </div>
+        <div>
+          <div className="font-semibold">Date</div>
+          <div className="text-sm text-neutral-600">{formatDate(speaker.assigned_date)}</div>
+        </div>
+        <div>
+          <button className="px-3 py-2 bg-primary text-white rounded">Download Poster (PDF)</button>
+        </div>
       </div>
     </div>
   );
-};
+}
 
-// Speaker Access View with improved UI
-const SpeakerAccessView = ({ speaker, availableDates, onAccept, onDecline, formatDate }) => {
-  const [selectedDate, setSelectedDate] = useState('');
-  const [talkTitle, setTalkTitle] = useState('');
-  const [talkAbstract, setTalkAbstract] = useState('');
-  const [wordCount, setWordCount] = useState(0);
-
-  const handleAbstractChange = (e) => {
-    const text = e.target.value;
-    const words = text.trim().split(/\s+/).filter(w => w.length > 0);
-    if (words.length <= 500) {
-      setTalkAbstract(text);
-      setWordCount(words.length);
-    }
-  };
-
-  if (speaker.status === 'Accepted') {
-    return (
-      <div style={styles.speakerContainer}>
-        <div style={styles.speakerBox}>
-          <h2 style={styles.speakerTitle}>✓ Invitation Accepted</h2>
-          <p>Thank you, {speaker.full_name}! Your presentation has been confirmed.</p>
-          <p>The organizers will contact you shortly about travel arrangements.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (speaker.status === 'Declined') {
-    return (
-      <div style={styles.speakerContainer}>
-        <div style={styles.speakerBox}>
-          <h2 style={styles.speakerTitle}>Invitation Declined</h2>
-          <p>Thank you for your response, {speaker.full_name}.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!selectedDate || !talkTitle.trim()) {
-      alert('Please select a date and enter a talk title');
-      return;
-    }
-    onAccept(selectedDate, talkTitle, talkAbstract);
-  };
-
-  const availableDatesForSpeaker = availableDates.filter(d => d.available && d.locked_by_id !== 'DELETED');
-  const selectedDateInfo = availableDatesForSpeaker.find(d => d.id === selectedDate);
-
+/* ---------------------
+   AddDateForm
+   --------------------- */
+function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
+  const [form, setForm] = useState({ date: '', host: '', notes: '' });
+  const handle = (e) => { e.preventDefault(); onSubmit(form); };
   return (
-    <div style={styles.speakerContainer}>
-      <div style={{...styles.speakerBox, maxWidth: '800px'}}>
-        <h2 style={styles.speakerTitle}>Seminar Invitation</h2>
-        <p style={styles.speakerText}>Dear {speaker.full_name},</p>
-        <p style={styles.speakerText}>
-          We are delighted to invite you to present a seminar at the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona.
-        </p>
-        <p style={styles.speakerText}>Your host will be: <strong>{speaker.host}</strong></p>
-
-        <form onSubmit={handleSubmit} style={styles.speakerForm}>
-          <label style={styles.labelLarge}>Talk Title *</label>
-          <input
-            type="text"
-            value={talkTitle}
-            onChange={(e) => setTalkTitle(e.target.value)}
-            style={{
-              ...styles.input, 
-              fontSize: '16px', 
-              padding: '14px',
-              width: '100%',
-              boxSizing: 'border-box'
-            }}
-            placeholder="Enter your talk title"
-            required
-          />
-
-          <label style={styles.labelLarge}>
-            Talk Abstract (Optional - max 500 words)
-            <span style={{float: 'right', fontSize: '14px', color: wordCount > 450 ? '#e74c3c' : '#666'}}>
-              {wordCount}/500 words
-            </span>
-          </label>
-          <textarea
-            value={talkAbstract}
-            onChange={handleAbstractChange}
-            style={{
-              ...styles.input,
-              minHeight: '180px',
-              resize: 'vertical',
-              fontSize: '15px',
-              lineHeight: '1.6',
-              width: '100%',
-              boxSizing: 'border-box'
-            }}
-            placeholder="Enter a brief abstract of your talk"
-          />
-
-          <label style={styles.labelLarge}>Select Available Date *</label>
-          <CalendarDatePicker
-            availableDates={availableDatesForSpeaker}
-            selectedDate={selectedDate}
-            onSelectDate={setSelectedDate}
-            formatDate={formatDate}
-          />
-
-          {selectedDateInfo && (
-            <div style={styles.selectedDateInfo}>
-              <strong>Selected Date:</strong> {formatDate(selectedDateInfo.date)} - {selectedDateInfo.host}
-              {selectedDateInfo.notes && <span> ({selectedDateInfo.notes})</span>}
-            </div>
-          )}
-
-          <div style={styles.buttonGroup}>
-            <button type="submit" style={{...styles.submitBtn, ...styles.acceptBtn, fontSize: '16px', padding: '14px'}}>
-              Accept Invitation
-            </button>
-            <button 
-              type="button" 
-              onClick={onDecline} 
-              style={{...styles.submitBtn, ...styles.declineBtn, fontSize: '16px', padding: '14px'}}>
-              Decline
-            </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+        <h3 className="text-xl font-semibold mb-4">Add Available Date</h3>
+        <form onSubmit={handle} className="space-y-4">
+          <div>
+            <label className="text-sm block mb-1">Date *</label>
+            <input type="date" className="w-full border rounded px-3 py-2" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Host</label>
+            <input className="w-full border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Notes</label>
+            <input className="w-full border rounded px-3 py-2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onCancel} type="button" className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Add Date</button>
           </div>
         </form>
       </div>
     </div>
   );
-};
+}
+
+/* ---------------------
+   AddSpeakerForm
+   --------------------- */
+function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countries }) {
+  const [form, setForm] = useState({ full_name: '', email: '', affiliation: '', country: '', area_of_expertise: '', ranking: 'Medium Priority', notes: '', host: currentUser?.full_name || '' });
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+        <h3 className="text-xl font-semibold mb-4">Propose Speaker</h3>
+        <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm block mb-1">Full Name *</label>
+            <input required className="w-full border rounded px-3 py-2" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Email *</label>
+            <input required type="email" className="w-full border rounded px-3 py-2" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Affiliation *</label>
+            <input required className="w-full border rounded px-3 py-2" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Country *</label>
+            <select required className="w-full border rounded px-3 py-2" value={form.country} onChange={e => setForm({ ...form, country: e.target.value })}>
+              <option value="">-- Select Country --</option>
+              {countries.map((c, idx) => c.startsWith('---') ? <option key={idx} disabled>{c}</option> : <option key={idx}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Area of Expertise *</label>
+            <input required className="w-full border rounded px-3 py-2" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Priority</label>
+            <select className="w-full border rounded px-3 py-2" value={form.ranking} onChange={e => setForm({ ...form, ranking: e.target.value })}>
+              <option>High Priority</option>
+              <option>Medium Priority</option>
+              <option>Low Priority</option>
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="text-sm block mb-1">Notes *</label>
+            <input className="w-full border rounded px-3 py-2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value})} placeholder="Optional notes about why this speaker should be invited" />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Host *</label>
+            <select required className="w-full border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })}>
+              <option value="">-- Select Host --</option>
+              {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
+            </select>
+          </div>
+          <div className="col-span-2 flex justify-end gap-2">
+            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Propose Speaker</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   AddPastSpeakerForm
+   --------------------- */
+function AddPastSpeakerForm({ onSubmit, onCancel, seniorFellows, countries }) {
+  const [form, setForm] = useState({ full_name: '', email: '', affiliation: '', country: '', area_of_expertise: '', host: '', assigned_date: '', talk_title: '', talk_abstract: '' });
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+        <h3 className="text-xl font-semibold mb-4">Add Past Speaker</h3>
+        <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+          <input className="col-span-2 border rounded px-3 py-2" placeholder="Full name" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
+          <input className="border rounded px-3 py-2" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          <input className="border rounded px-3 py-2" placeholder="Affiliation" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} required />
+          <select className="border rounded px-3 py-2" value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} required>
+            <option value="">-- Country --</option>
+            {countries.map((c, idx) => c.startsWith('---') ? <option key={idx} disabled>{c}</option> : <option key={idx}>{c}</option>)}
+          </select>
+          <input className="border rounded px-3 py-2" placeholder="Area of expertise" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} required />
+          <select className="border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} required>
+            <option value="">-- Host --</option>
+            {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
+          </select>
+          <input type="date" className="border rounded px-3 py-2" value={form.assigned_date} onChange={e => setForm({ ...form, assigned_date: e.target.value })} required />
+          <input className="border rounded px-3 py-2" placeholder="Talk title" value={form.talk_title} onChange={e => setForm({ ...form, talk_title: e.target.value })} />
+          <textarea className="col-span-2 border rounded px-3 py-2" placeholder="Talk abstract" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
+          <div className="col-span-2 flex justify-end gap-2">
+            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Add Past Speaker</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   EditSpeakerForm
+   --------------------- */
+function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries }) {
+  const [form, setForm] = useState({
+    full_name: speaker.full_name || '',
+    email: speaker.email || '',
+    affiliation: speaker.affiliation || '',
+    country: speaker.country || '',
+    area_of_expertise: speaker.area_of_expertise || '',
+    ranking: speaker.ranking || 'Medium Priority',
+    host: speaker.host || ''
+  });
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+        <h3 className="text-xl font-semibold mb-4">Edit Speaker</h3>
+        <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+          <input className="col-span-2 border rounded px-3 py-2" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
+          <input className="border rounded px-3 py-2" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required />
+          <input className="border rounded px-3 py-2" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} required />
+          <select className="border rounded px-3 py-2" value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} required>
+            <option value="">-- Country --</option>
+            {countries.map((c, idx) => c.startsWith('---') ? <option key={idx} disabled>{c}</option> : <option key={idx}>{c}</option>)}
+          </select>
+          <input className="border rounded px-3 py-2" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} required />
+          <select className="border rounded px-3 py-2" value={form.ranking} onChange={e => setForm({ ...form, ranking: e.target.value })}>
+            <option>High Priority</option>
+            <option>Medium Priority</option>
+            <option>Low Priority</option>
+          </select>
+          <select className="border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} required>
+            <option value="">-- Host --</option>
+            {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
+          </select>
+          <div className="col-span-2 flex justify-end gap-2">
+            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   EditConfirmedSpeakerForm
+   --------------------- */
+function EditConfirmedSpeakerForm({ speaker, availableDates, onSubmit, onDelete, onCancel, formatDate }) {
+  const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
+  const [form, setForm] = useState({
+    talk_title: speaker.talk_title || '',
+    talk_abstract: speaker.talk_abstract || '',
+    host: speaker.host || '',
+    assigned_date: speaker.assigned_date ? (speaker.assigned_date.toDate ? speaker.assigned_date.toDate().toISOString().split('T')[0] : new Date(speaker.assigned_date).toISOString().split('T')[0]) : '',
+    current_date_id: currentLockedDate?.id || null,
+    new_date_id: currentLockedDate?.id || null,
+    old_date_id: currentLockedDate?.id || null
+  });
+
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+
+  const selectableDates = availableDates.filter(d => (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+        <h3 className="text-xl font-semibold mb-4">Edit Confirmed Speaker</h3>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-sm block mb-1">Talk Title</label>
+            <input className="w-full border rounded px-3 py-2" value={form.talk_title} onChange={e => setForm({ ...form, talk_title: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Talk Abstract</label>
+            <textarea className="w-full border rounded px-3 py-2 min-h-[120px]" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Host</label>
+            <input className="w-full border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Assigned Date</label>
+            <select className="w-full border rounded px-3 py-2" value={form.new_date_id || ''} onChange={(e) => {
+              const selectedDateId = e.target.value;
+              const selectedDate = availableDates.find(d => d.id === selectedDateId);
+              setForm({
+                ...form,
+                new_date_id: selectedDateId,
+                assigned_date: selectedDate?.date ? (selectedDate.date.toDate ? selectedDate.date.toDate().toISOString().split('T')[0] : new Date(selectedDate.date).toISOString().split('T')[0]) : ''
+              });
+            }} required>
+              <option value="">-- Select Date --</option>
+              {selectableDates.map(d => <option key={d.id} value={d.id}>{formatDate(d.date)} - {d.host} {d.notes ? `(${d.notes})` : ''}{d.id === currentLockedDate?.id ? ' (Current)' : ''}</option>)}
+            </select>
+          </div>
+
+          <div className="flex justify-between gap-2">
+            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
+            <div className="flex gap-2">
+              <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
+              <button type="button" onClick={() => onDelete(speaker.id)} className="px-3 py-2 bg-red-600 text-white rounded">Delete Speaker</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   InviteUserForm
+   --------------------- */
+function InviteUserForm({ onSubmit, onCancel }) {
+  const [form, setForm] = useState({ email: '', full_name: '', affiliation: '', role: 'Senior Fellow' });
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-lg">
+        <h3 className="text-xl font-semibold mb-4">Create User Invitation</h3>
+        <form onSubmit={submit} className="space-y-3">
+          <input required className="w-full border rounded px-3 py-2" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          <input required className="w-full border rounded px-3 py-2" placeholder="Full name" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} />
+          <input required className="w-full border rounded px-3 py-2" placeholder="Affiliation" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} />
+          <select className="w-full border rounded px-3 py-2" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+            <option>Senior Fellow</option>
+            <option>Fellow</option>
+            <option>Organizer</option>
+          </select>
+          <div className="flex justify-end gap-2">
+            <button onClick={onCancel} type="button" className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Create Invitation</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   EditUserForm
+   --------------------- */
+function EditUserForm({ user, onSubmit, onCancel }) {
+  const [form, setForm] = useState({ full_name: user.full_name, affiliation: user.affiliation || '', role: user.role });
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-md">
+        <h3 className="text-xl font-semibold mb-4">Edit User</h3>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="text-sm block mb-1">Email</label>
+            <input className="w-full border rounded px-3 py-2 bg-neutral-100" value={user.email} disabled />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Full name</label>
+            <input className="w-full border rounded px-3 py-2" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Affiliation</label>
+            <input className="w-full border rounded px-3 py-2" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Role</label>
+            <select className="w-full border rounded px-3 py-2" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+              <option>Senior Fellow</option>
+              <option>Fellow</option>
+              <option>Organizer</option>
+            </select>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onCancel} type="button" className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   EditProfileForm
+   --------------------- */
+function EditProfileForm({ userRole, onSubmit, onCancel }) {
+  const [form, setForm] = useState({ full_name: userRole.full_name, affiliation: userRole.affiliation || '' });
+  const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-md">
+        <h3 className="text-xl font-semibold mb-4">Edit My Profile</h3>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="text-sm block mb-1">Email</label>
+            <input className="w-full border rounded px-3 py-2 bg-neutral-100" value={userRole.email} disabled />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Full name</label>
+            <input className="w-full border rounded px-3 py-2" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Affiliation</label>
+            <input className="w-full border rounded px-3 py-2" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} required />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onCancel} type="button" className="px-3 py-2 border rounded">Cancel</button>
+            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 // Styles
 const styles = {
@@ -5112,16 +5052,14 @@ const styles = {
   },
 
   agendaSidebar: {
-    width: '700px',
+    width: '100%',  // Changed from fixed width
+    height: '100%', // Changed to fill modal
     backgroundColor: 'white',
-    borderLeft: '1px solid #ddd',
-    boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
     display: 'flex',
     flexDirection: 'column',
-    maxHeight: 'calc(100vh - 120px)',
-    position: 'sticky',
-    top: '120px',
+    overflow: 'hidden',
   },
+
   calendarContainer: {
     flex: 1,
     overflowY: 'auto',
@@ -5431,5 +5369,6 @@ const styles = {
     backgroundColor: '#f8f9fa',
   },
 };
-
-export default App;
+/* ============================================================
+   End of file
+   ============================================================ */
