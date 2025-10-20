@@ -1223,7 +1223,7 @@ const handleDeleteDate = async (dateId) => {
           />
         )}
 
-          {activeTab === 'availability' && (userRole?.role === 'Fellow' || userRole?.role === 'Organizer') && (
+          {activeTab === 'availability' && (userRole?.role === 'Fellow' || userRole?.role === 'Senior Fellow' || userRole?.role === 'Organizer') && (
             <AvailabilityView
               dates={availableDates.filter(d => d.locked_by_id !== 'DELETED')}
               userAvailability={userAvailability}
