@@ -797,10 +797,8 @@ const handleDeleteDate = async (dateId) => {
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
         const emailBody = `Dear ${formData.full_name},
     
-    You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
-    
-    Your affiliation: ${formData.affiliation}
-    
+    You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
+        
     Please use the following link to complete your registration:
     ${signupLink}
     
@@ -847,10 +845,8 @@ const handleDeleteDate = async (dateId) => {
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${invitation.role}`;
         const emailBody = `Dear ${invitation.full_name},
     
-    You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
-    
-    Your affiliation: ${invitation.affiliation}
-    
+    You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
+        
     Please use the following link to complete your registration:
     ${signupLink}
     
