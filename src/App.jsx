@@ -797,14 +797,14 @@ const handleDeleteDate = async (dateId) => {
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
         const emailBody = `Dear ${formData.full_name},
     
-    You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
+You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
         
-    Please use the following link to complete your registration:
-    ${signupLink}
+Please use the following link to complete your registration:
+${signupLink}
     
-    This invitation will remain valid for 30 days.
+This invitation will remain valid for 30 days.
     
-    Best regards,
+Best regards,
     ${userRole.full_name}`;
     
         setInvitationData({
@@ -843,16 +843,17 @@ const handleDeleteDate = async (dateId) => {
         const invitation = { id: invDoc.id, ...invDoc.data() };
         
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${invitation.role}`;
-        const emailBody = `Dear ${invitation.full_name},
+        const emailBody = 
+`Dear ${invitation.full_name},
     
-    You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
+You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
         
-    Please use the following link to complete your registration:
-    ${signupLink}
+Please use the following link to complete your registration:
+${signupLink}
     
-    This invitation will remain valid for 30 days.
+This invitation will remain valid for 30 days.
     
-    Best regards,
+Best regards,
     ${userRole.full_name}`;
     
         setInvitationData({
