@@ -797,15 +797,17 @@ const handleDeleteDate = async (dateId) => {
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
         const emailBody = `Dear ${formData.full_name},
     
-You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
-        
-Please use the following link to complete your registration:
-${signupLink}
+    You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
     
-This invitation will remain valid for 30 days.
+    Your affiliation: ${formData.affiliation}
     
-Best regards,
-${userRole.full_name}`;
+    Please use the following link to complete your registration:
+    ${signupLink}
+    
+    This invitation will remain valid for 30 days.
+    
+    Best regards,
+    ${userRole.full_name}`;
     
         setInvitationData({
           email: formData.email,
@@ -843,18 +845,19 @@ ${userRole.full_name}`;
         const invitation = { id: invDoc.id, ...invDoc.data() };
         
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${invitation.role}`;
-        const emailBody = 
-`Dear ${invitation.full_name},
+        const emailBody = `Dear ${invitation.full_name},
     
-You have been invited to join the <strong>Seminar Management App<strong> of the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
-        
-Please use the following link to complete your registration:
-${signupLink}
+    You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
     
-This invitation will remain valid for 30 days.
+    Your affiliation: ${invitation.affiliation}
     
-Best regards,
-${userRole.full_name}`;
+    Please use the following link to complete your registration:
+    ${signupLink}
+    
+    This invitation will remain valid for 30 days.
+    
+    Best regards,
+    ${userRole.full_name}`;
     
         setInvitationData({
           email: invitation.email,
@@ -2397,9 +2400,6 @@ function SignupView({ invitation, onSignup }) {
                           <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
                             {s.ranking}
                           </span>
-                          <div className="px-3 py-1 rounded text-sm font-medium border border-primary text-primary bg-primary/5">
-                            👍 {voteCount}
-                          </div>
                         </div>
                         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                           <button
