@@ -805,7 +805,7 @@ ${signupLink}
 This invitation will remain valid for 30 days.
     
 Best regards,
-    ${userRole.full_name}`;
+${userRole.full_name}`;
     
         setInvitationData({
           email: formData.email,
@@ -854,7 +854,7 @@ ${signupLink}
 This invitation will remain valid for 30 days.
     
 Best regards,
-    ${userRole.full_name}`;
+${userRole.full_name}`;
     
         setInvitationData({
           email: invitation.email,
