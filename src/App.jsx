@@ -1,6 +1,6 @@
 // src/App.jsx
 import React, { useState, useEffect, useCallback, useMemo} from 'react';
-import { getData as getCountryData } from 'country-list';
+import { getData as getCountryData, getCode } from 'country-list';
 import {
   signInWithEmailAndPassword,
   signOut,
@@ -123,6 +123,9 @@ export default function App() {
   const [passwordResetUser, setPasswordResetUser] = useState(null);
   const [showInvitationPanel, setShowInvitationPanel] = useState(false);
   const [invitationData, setInvitationData] = useState(null);
+
+  const [editingMeeting, setEditingMeeting] = useState(null);
+  const [editingMeetingIndex, setEditingMeetingIndex] = useState(null);
   /* ---------------------------
      Data Loaders (Firestore)
      --------------------------- */
@@ -217,6 +220,7 @@ export default function App() {
     
     return speakers.filter(speaker => {
       if (speaker.status !== 'Accepted' || !speaker.assigned_date) return false;
+      if (speaker.lunch_reservation_booked) return false; // Skip if reservation is booked
       
       // Check if user is host or organizer
       const isRelevant = userRole.role === 'Organizer' || speaker.host === userRole.full_name;
@@ -237,6 +241,17 @@ export default function App() {
       });
     }
   }, [upcomingLunchReminders]);
+
+  const handleMarkLunchReservationBooked = async (speakerId) => {
+    try {
+      await updateDoc(doc(db, 'speakers', speakerId), {
+        lunch_reservation_booked: true
+      });
+      await loadSpeakers();
+    } catch (err) {
+      alert('Error updating reservation status: ' + (err.message || err));
+    }
+  };
 
   /* ---------------------------
      Token / Signup handling
@@ -376,53 +391,56 @@ export default function App() {
     }
   };
 
-  /* ---------------------------
-     Speaker / Date / Invitation handlers
-     --------------------------- */
+/* ---------------------------
+  Speaker / Date / Invitation handlers
+  --------------------------- */
   const handleAddDate = async (formData) => {
-    try {
-      const newDate = new Date(formData.date);
-      const newDateString = newDate.toISOString().split('T')[0];
-      const duplicate = availableDates.find(d => {
-        if (d.locked_by_id === 'DELETED') return false;
-        const existing = d.date?.toDate ? d.date.toDate() : new Date(d.date);
-        return existing.toISOString().split('T')[0] === newDateString;
-      });
-      if (duplicate) {
-        alert(`This date (${formatDate(duplicate.date)}) already exists.`);
-        return;
-      }
-      await addDoc(collection(db, 'available_dates'), {
-        ...formData,
-        date: Timestamp.fromDate(newDate),
-        available: true,
-        locked_by_id: null,
-        createdAt: serverTimestamp()
-      });
-      await loadAvailableDates();
-      setShowAddDateForm(false);
-    } catch (err) {
-      alert('Error adding date: ' + (err.message || err));
-    }
-  };
-
-  const handleDeleteDate = async (dateId) => {
-    const date = availableDates.find(d => d.id === dateId);
-    if (date && !date.available) {
-      alert('Cannot delete a date that is locked by a speaker.');
+  try {
+    const newDate = new Date(formData.date);
+    const newDateString = newDate.toISOString().split('T')[0];
+    const duplicate = availableDates.find(d => {
+      if (d.locked_by_id === 'DELETED') return false;
+      const existing = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+      return existing.toISOString().split('T')[0] === newDateString;
+    });
+    if (duplicate) {
+      alert(`This date (${formatDate(duplicate.date)}) already exists.`);
       return;
     }
-    if (!window.confirm('Are you sure you want to delete this date?')) return;
-    try {
-      await updateDoc(doc(db, 'available_dates', dateId), {
-        available: false,
-        locked_by_id: 'DELETED'
-      });
-      await loadAvailableDates();
-    } catch (err) {
-      alert('Error deleting date: ' + (err.message || err));
-    }
-  };
+    await addDoc(collection(db, 'available_dates'), {
+      date: Timestamp.fromDate(newDate),
+      available: formData.type === 'available',
+      is_conflicting: formData.type === 'conflicting',
+      locked_by_id: null,
+      host: formData.host || '',
+      notes: formData.notes || '',
+      createdAt: serverTimestamp()
+    });
+    await loadAvailableDates();
+    setShowAddDateForm(false);
+  } catch (err) {
+    alert('Error adding date: ' + (err.message || err));
+  }
+};
+
+const handleDeleteDate = async (dateId) => {
+  const date = availableDates.find(d => d.id === dateId);
+  // Only prevent deletion if date is locked by a speaker (not just unavailable/conflicting)
+  if (date && date.locked_by_id && date.locked_by_id !== 'DELETED') {
+    alert('Cannot delete a date that is locked by a speaker.');
+    return;
+  }
+  if (!window.confirm('Are you sure you want to delete this date?')) return;
+  try {
+    await updateDoc(doc(db, 'available_dates', dateId), {
+      available: false,
+      locked_by_id: 'DELETED'
+    });
+    await loadAvailableDates();
+  } catch (err) {
+    alert('Error deleting date: ' + (err.message || err));
+  }
+};
 
   const handleAddSpeaker = async (formData) => {
     try {
@@ -490,7 +508,7 @@ export default function App() {
         status: 'Invited',
         access_token: token,
         invitation_sent_date: serverTimestamp(),
-        response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+        response_deadline: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)),
         actions
       });
       await loadSpeakers();
@@ -506,7 +524,7 @@ export default function App() {
     try {
       await updateDoc(doc(db, 'speakers', speaker.id), {
         invitation_sent_date: serverTimestamp(),
-        response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
+        response_deadline: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))
       });
       await loadSpeakers();
       const updated = { ...speaker, invitation_sent_date: Timestamp.now(), response_deadline: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)) };
@@ -806,6 +824,66 @@ export default function App() {
       }
     };
 
+/* ---------------------------
+     Resend user invitation
+     --------------------------- */
+    const handleResendUserInvitation = async (invitationId) => {
+      try {
+        const newToken = generateToken();
+        const signupLink = `${window.location.origin}?signup=${newToken}`;
+        
+        await updateDoc(doc(db, 'invitations', invitationId), {
+          token: newToken,
+          expires_at: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+          resent_at: serverTimestamp()
+        });
+        
+        await loadInvitations();
+        
+        // Get the updated invitation
+        const invDoc = await getDoc(doc(db, 'invitations', invitationId));
+        const invitation = { id: invDoc.id, ...invDoc.data() };
+        
+        const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${invitation.role}`;
+        const emailBody = `Dear ${invitation.full_name},
+    
+    You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
+    
+    Your affiliation: ${invitation.affiliation}
+    
+    Please use the following link to complete your registration:
+    ${signupLink}
+    
+    This invitation will remain valid for 30 days.
+    
+    Best regards,
+    ${userRole.full_name}`;
+    
+        setInvitationData({
+          email: invitation.email,
+          subject: emailSubject,
+          body: emailBody,
+          link: signupLink
+        });
+        setShowInvitationPanel(true);
+        
+        alert('Invitation resent successfully!');
+      } catch (err) {
+        alert('Error resending invitation: ' + (err.message || err));
+      }
+    };
+    
+    const handleDeleteUserInvitation = async (invitationId) => {
+      if (!window.confirm('Are you sure you want to delete this invitation?')) return;
+      try {
+        await deleteDoc(doc(db, 'invitations', invitationId));
+        await loadInvitations();
+        alert('Invitation deleted successfully!');
+      } catch (err) {
+        alert('Error deleting invitation: ' + (err.message || err));
+      }
+    };
+
   /* ---------------------------
      Users (edit/delete/reset)
      --------------------------- */
@@ -868,21 +946,26 @@ export default function App() {
     setShowPasswordResetPanel(true);
   };
 
-  /* ---------------------------
-     User availability
-     --------------------------- */
-  const handleUpdateAvailability = async (dateId, available) => {
+/* ---------------------------
+    User availability
+    --------------------------- */
+    const handleUpdateAvailability = async (dateId, available, conflictNote) => {
     try {
       const existing = userAvailability.find(ua => ua.user_id === user.uid && ua.date_id === dateId);
       if (existing) {
-        await updateDoc(doc(db, 'user_availability', existing.id), { available, updatedAt: serverTimestamp() });
+        await updateDoc(doc(db, 'user_availability', existing.id), { 
+          available, 
+          conflictNote: conflictNote || null,
+          updatedAt: serverTimestamp() 
+        });
       } else {
-        if (!available) {
+        if (!available || conflictNote) {
           await addDoc(collection(db, 'user_availability'), {
             user_id: user.uid,
             user_name: userRole.full_name,
             date_id: dateId,
-            available: false,
+            available: available,
+            conflictNote: conflictNote || null,
             createdAt: serverTimestamp()
           });
         }
@@ -942,6 +1025,43 @@ export default function App() {
       await loadAgendas();
     } catch (err) {
       alert('Error adding meeting: ' + (err.message || err));
+      await loadAgendas();
+      const original = agendas.find(a => a.id === selectedAgenda?.id);
+      if (original) setSelectedAgenda(original);
+    }
+  };
+
+  const handleEditMeeting = async (meetingIndex, meetingData) => {
+    try {
+      const agenda = selectedAgenda;
+      const meetings = [...(agenda.meetings || [])];
+      
+      const meetingDate = new Date(meetingData.date);
+      const [sh, sm] = meetingData.start_time.split(':');
+      const start = new Date(meetingDate);
+      start.setHours(parseInt(sh, 10), parseInt(sm, 10), 0, 0);
+      const [eh, em] = meetingData.end_time.split(':');
+      const end = new Date(meetingDate);
+      end.setHours(parseInt(eh, 10), parseInt(em, 10), 0, 0);
+      
+      meetings[meetingIndex] = {
+        ...meetings[meetingIndex],
+        title: meetingData.title,
+        type: meetingData.type,
+        date: Timestamp.fromDate(meetingDate),
+        start_time: Timestamp.fromDate(start),
+        end_time: Timestamp.fromDate(end),
+        location: meetingData.location || '',
+        attendees: meetingData.attendees ? meetingData.attendees.split(',').map(a => a.trim()) : [],
+        notes: meetingData.notes || ''
+      };
+      
+      const updatedAgenda = { ...agenda, meetings };
+      setSelectedAgenda(updatedAgenda);
+      await updateDoc(doc(db, 'agendas', agenda.id), { meetings });
+      await loadAgendas();
+    } catch (err) {
+      alert('Error updating meeting: ' + (err.message || err));
       await loadAgendas();
       const original = agendas.find(a => a.id === selectedAgenda?.id);
       if (original) setSelectedAgenda(original);
@@ -1055,8 +1175,8 @@ export default function App() {
       {/* Main container with max-width */}
       <div className="flex max-w-[1600px] mx-auto">
         {/* Left nav - REDUCED */}
-        <nav className="w-56 bg-white border-r p-4 space-y-2">
-          <NavButton label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+        <nav className="w-56 bg-white border-r p-4 space-y-2 min-h-screen">
+        <NavButton label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
           <NavButton label="Past Speakers" active={activeTab === 'statistics'} onClick={() => setActiveTab('statistics')} />
           {(userRole?.role === 'Fellow' || userRole?.role === 'Senior Fellow' || userRole?.role === 'Organizer') && (
             <NavButton label="My Availability" active={activeTab === 'availability'} onClick={() => setActiveTab('availability')} />
@@ -1077,28 +1197,31 @@ export default function App() {
 
         {/* Main content - with flex-1 but constrained by parent max-width */}
         <main className="flex-1 p-6 space-y-6 overflow-x-hidden">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              userRole={userRole}
-              speakers={speakers}
-              availableDates={availableDates}
-              upcomingLunchReminders={upcomingLunchReminders}
-              onAcceptSpeaker={handleAcceptSpeaker}
-              onRejectSpeaker={handleRejectSpeaker}
-              onResendInvitation={handleResendInvitation}
-              onEditSpeaker={(s) => { setEditingSpeaker(s); setShowEditSpeakerForm(true); }}
-              onEditConfirmed={(s) => { setEditingSpeaker(s); setShowEditConfirmedForm(true); }}
-              onViewActions={(s) => { setSidebarSpeaker(s); setShowSidebar(true); }}
-              onViewAgenda={handleViewAgenda}
-              onGeneratePoster={handleGeneratePoster}
-              onDeleteInvited={handleDeleteInvitedSpeaker}
-              onVoteSpeaker={handleVoteSpeaker}
-              currentUser={userRole}
-              getRankingColor={getRankingColor}
-              getStatusColor={getStatusColor}
-              formatDate={formatDate}
-            />
-          )}
+        {activeTab === 'dashboard' && (
+          <DashboardView
+            userRole={userRole}
+            speakers={speakers}
+            availableDates={availableDates}
+            upcomingLunchReminders={upcomingLunchReminders}
+            onAcceptSpeaker={handleAcceptSpeaker}
+            onRejectSpeaker={handleRejectSpeaker}
+            onResendInvitation={handleResendInvitation}
+            onEditSpeaker={(s) => { setEditingSpeaker(s); setShowEditSpeakerForm(true); }}
+            onEditConfirmed={(s) => { setEditingSpeaker(s); setShowEditConfirmedForm(true); }}
+            onViewActions={(s) => { setSidebarSpeaker(s); setShowSidebar(true); }}
+            onViewAgenda={handleViewAgenda}
+            onGeneratePoster={handleGeneratePoster}
+            onDeleteInvited={handleDeleteInvitedSpeaker}
+            onVoteSpeaker={handleVoteSpeaker}
+            onMarkLunchBooked={handleMarkLunchReservationBooked}
+            currentUser={userRole}
+            getRankingColor={getRankingColor}
+            getStatusColor={getStatusColor}
+            formatDate={formatDate}
+            allUsers={allUsers}   
+            userAvailability={userAvailability}
+          />
+        )}
 
           {activeTab === 'availability' && (userRole?.role === 'Fellow' || userRole?.role === 'Organizer') && (
             <AvailabilityView
@@ -1123,7 +1246,7 @@ export default function App() {
             <DatesView
               dates={availableDates.filter(d => d.locked_by_id !== 'DELETED')}
               speakers={speakers}
-              onAddDate={() => setShowAddDateForm(true)}
+              onAddDateDirect={handleAddDate}
               onDeleteDate={handleDeleteDate}
               formatDate={formatDate}
             />
@@ -1144,6 +1267,8 @@ export default function App() {
             <InvitationsView
               invitations={invitations}
               onCreateInvitation={() => setShowInviteUserForm(true)}
+              onResendInvitation={handleResendUserInvitation}
+              onDeleteInvitation={handleDeleteUserInvitation}
               formatDate={formatDate}
             />
           )}
@@ -1166,17 +1291,18 @@ export default function App() {
         </main>
 
         {/* Right panel - with full height */}
-        <aside className="w-80 border-l bg-white p-4 min-h-screen">
-          {showSidebar && sidebarSpeaker && (
-            <ActionsSidebar
-              speaker={sidebarSpeaker}
-              onClose={() => { setShowSidebar(false); setSidebarSpeaker(null); }}
-              onUpdateAction={handleUpdateAction}
-              onAddAction={handleAddManualAction}
-              currentUser={userRole}
-              formatDate={formatDate}
-            />
-          )}
+        <aside className="w-[425px] border-l bg-white p-4 min-h-screen">
+        {showSidebar && sidebarSpeaker && (
+          <ActionsSidebar
+            speaker={sidebarSpeaker}
+            onClose={() => { setShowSidebar(false); setSidebarSpeaker(null); }}
+            onUpdateAction={handleUpdateAction}
+            onAddAction={handleAddManualAction}
+            currentUser={userRole}
+            formatDate={formatDate}
+            allUsers={allUsers}
+          />
+        )}
 
           {showPosterSidebar && posterSpeaker && (
             <PosterSidebar
@@ -1192,13 +1318,13 @@ export default function App() {
       {/* Modals & Forms */}
       {showAddDateForm && <AddDateForm onSubmit={handleAddDate} onCancel={() => setShowAddDateForm(false)} existingDates={availableDates} formatDate={formatDate} />}
 
-      {showAddSpeakerForm && <AddSpeakerForm onSubmit={handleAddSpeaker} onCancel={() => setShowAddSpeakerForm(false)} seniorFellows={seniorFellows} currentUser={userRole} countries={COUNTRIES} />}
+      {showAddSpeakerForm && <AddSpeakerForm onSubmit={handleAddSpeaker} onCancel={() => setShowAddSpeakerForm(false)} seniorFellows={seniorFellows} currentUser={userRole} countries={COUNTRIES} availableDates={availableDates} userAvailability={userAvailability} formatDate={formatDate} />}
 
       {showAddPastSpeakerForm && <AddPastSpeakerForm onSubmit={handleAddPastSpeaker} onCancel={() => setShowAddPastSpeakerForm(false)} seniorFellows={seniorFellows} countries={COUNTRIES} />}
 
       {showEditSpeakerForm && editingSpeaker && <EditSpeakerForm speaker={editingSpeaker} onSubmit={handleEditSpeaker} onCancel={() => { setShowEditSpeakerForm(false); setEditingSpeaker(null); }} seniorFellows={seniorFellows} countries={COUNTRIES} />}
 
-      {showEditConfirmedForm && editingSpeaker && <EditConfirmedSpeakerForm speaker={editingSpeaker} availableDates={availableDates} onSubmit={handleEditConfirmedSpeaker} onDelete={handleDeleteConfirmedSpeaker} onCancel={() => { setShowEditConfirmedForm(false); setEditingSpeaker(null); }} formatDate={formatDate} />}
+      {showEditConfirmedForm && editingSpeaker && <EditConfirmedSpeakerForm speaker={editingSpeaker} availableDates={availableDates} onSubmit={handleEditConfirmedSpeaker} onDelete={handleDeleteConfirmedSpeaker} onCancel={() => { setShowEditConfirmedForm(false); setEditingSpeaker(null); }} formatDate={formatDate} seniorFellows={seniorFellows} userAvailability={userAvailability} />}
 
       {showInviteUserForm && <InviteUserForm onSubmit={handleCreateInvitation} onCancel={() => setShowInviteUserForm(false)} />}
 
@@ -1212,20 +1338,51 @@ export default function App() {
           <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
             <AgendaSidebar
               agenda={selectedAgenda}
-              onClose={() => { setShowAgendaSidebar(false); setSelectedAgenda(null); setShowAddMeetingForm(false); setSelectedTimeSlot(null); }}
-              onAddMeeting={() => setShowAddMeetingForm(true)}
+              onClose={() => { 
+                setShowAgendaSidebar(false); 
+                setSelectedAgenda(null); 
+                setShowAddMeetingForm(false); 
+                setSelectedTimeSlot(null);
+                setEditingMeeting(null);
+                setEditingMeetingIndex(null);
+              }}
+              onAddMeeting={() => {
+                setEditingMeeting(null);
+                setEditingMeetingIndex(null);
+                setShowAddMeetingForm(true);
+              }}
+              onEditMeeting={(meeting, index) => {
+                setEditingMeeting(meeting);
+                setEditingMeetingIndex(index);
+                setShowAddMeetingForm(true);
+              }}
               onDeleteMeeting={handleDeleteMeeting}
               showAddMeetingForm={showAddMeetingForm}
-              onSubmitMeeting={handleAddMeeting}
-              onCancelMeeting={() => { setShowAddMeetingForm(false); setSelectedTimeSlot(null); }}
+              onSubmitMeeting={(data) => {
+                if (editingMeetingIndex !== null) {
+                  handleEditMeeting(editingMeetingIndex, data);
+                } else {
+                  handleAddMeeting(data);
+                }
+                setEditingMeeting(null);
+                setEditingMeetingIndex(null);
+              }}
+              onCancelMeeting={() => { 
+                setShowAddMeetingForm(false); 
+                setSelectedTimeSlot(null);
+                setEditingMeeting(null);
+                setEditingMeetingIndex(null);
+              }}
               selectedTimeSlot={selectedTimeSlot}
               onSelectTimeSlot={setSelectedTimeSlot}
+              editingMeeting={editingMeeting}
               formatDate={formatDate}
               currentUser={userRole}
             />
           </div>
         </div>
       )}
+      
       {/* Password Reset Panel */}
       {showPasswordResetPanel && passwordResetUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -1416,46 +1573,106 @@ function NavButton({ label, active, onClick }) {
 /* ---------------------
    InvitedList helper
    --------------------- */
-   function InvitedList({ speakers, onResendInvitation, onDeleteInvited, onViewAgenda, formatDate, canEdit, currentUserRole }) {
+   function InvitedList({ speakers, onResendInvitation, onDeleteInvited, onViewAgenda, formatDate, canEdit, currentUserRole, allUsers, userAvailability, availableDates }) {
     if (!speakers || speakers.length === 0) return <p className="text-sm text-neutral-500">No pending invitations.</p>;
     
     return (
-      <div className="space-y-2">
-        {speakers.map(s => {
-          const deadline = s.response_deadline ? safeToDate(s.response_deadline) : null;
-          const isOverdue = deadline && deadline < new Date();
-          
-          return (
-            <div key={s.id} className={`border rounded p-3 flex justify-between items-start ${isOverdue ? 'border-red-300 bg-red-50' : ''}`}>
-              <div>
-                <div className="flex items-center gap-2">
-                  <div className="font-semibold">{s.full_name}</div>
-                  {isOverdue && (
-                    <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-semibold rounded">
-                      OVERDUE
-                    </span>
+      <div className="space-y-4">
+        {/* Color Legend */}
+        <div className="flex gap-4 text-xs bg-neutral-50 p-3 rounded-lg border">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-white border-2 border-neutral-300 rounded"></div>
+            <span>All proposed speakers available</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-orange-100 border-2 border-orange-300 rounded"></div>
+            <span>Some proposed speakers unavailable on date</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-red-100 border-2 border-red-300 rounded"></div>
+            <span>Deadline overdue</span>
+          </div>
+        </div>
+        
+        <div className="space-y-2">
+          {speakers.map(s => {
+            const deadline = s.response_deadline ? safeToDate(s.response_deadline) : null;
+            const isOverdue = deadline && deadline < new Date();
+            
+            // Get assigned date
+            const assignedDate = availableDates.find(d => d.locked_by_id === s.id);
+            
+            // Check if any proposed speakers (fellows/organizers) are unavailable on this date
+            const hasUnavailableFellows = assignedDate ? userAvailability.some(ua => 
+              ua.date_id === assignedDate.id && 
+              ua.available === false
+            ) : false;
+            
+            const bgColor = isOverdue 
+              ? 'border-red-300 bg-red-50' 
+              : hasUnavailableFellows 
+              ? 'border-orange-300 bg-orange-50'
+              : 'border-neutral-200 bg-white';
+            
+            return (
+              <div key={s.id} className={`border rounded-lg p-3 ${bgColor}`}>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="font-semibold">{s.full_name}</div>
+                      {isOverdue && (
+                        <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-semibold rounded">
+                          OVERDUE
+                        </span>
+                      )}
+                      {!isOverdue && hasUnavailableFellows && (
+                        <span className="px-2 py-0.5 bg-orange-500 text-white text-xs font-semibold rounded">
+                          ⚠️ CONFLICTS
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm text-neutral-600">{s.area_of_expertise} • {s.affiliation}</div>
+                    <div className="text-xs text-neutral-500 mt-1">
+                      Invited: {formatDate(s.invitation_sent_date)} • Deadline: {formatDate(s.response_deadline)}
+                      {isOverdue && <span className="text-red-600 font-semibold ml-2">⚠️ Response overdue!</span>}
+                      <br />Host: {s.host}
+                    </div>
+                    
+                    {/* Show unavailable fellows */}
+                    {!isOverdue && hasUnavailableFellows && assignedDate && (
+                      <div className="mt-2 p-2 bg-orange-100 border border-orange-300 rounded text-xs">
+                        <div className="font-semibold text-orange-800 mb-1">⚠️ Unavailable Fellows on {formatDate(assignedDate.date)}:</div>
+                        <div className="space-y-1">
+                          {userAvailability
+                            .filter(ua => ua.date_id === assignedDate.id && ua.available === false)
+                            .map((ua, idx) => (
+                              <div key={idx} className="text-orange-700">
+                                • {ua.user_name}
+                                {ua.conflictNote && <span className="italic ml-1">({ua.conflictNote})</span>}
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {(currentUserRole === 'Organizer' || canEdit(s)) && (
+                    <div className="space-y-1 ml-3">
+                      <button 
+                        onClick={() => onResendInvitation(s)} 
+                        className={`px-2 py-1 text-white text-xs rounded w-full ${isOverdue ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-500 hover:bg-emerald-600'}`}
+                      >
+                        {isOverdue ? 'Resend (Overdue)' : 'Resend'}
+                      </button>
+                      {currentUserRole === 'Organizer' && (
+                        <button onClick={() => onDeleteInvited(s.id)} className="px-2 py-1 bg-red-500 text-white text-xs rounded w-full hover:bg-red-600">Delete</button>
+                      )}
+                    </div>
                   )}
-                </div>
-                <div className="text-sm text-neutral-600">{s.area_of_expertise} • {s.affiliation}</div>
-                <div className="text-xs text-neutral-500 mt-1">
-                  Invited: {formatDate(s.invitation_sent_date)} • Deadline: {formatDate(s.response_deadline)}
-                  {isOverdue && <span className="text-red-600 font-semibold ml-2">⚠ Response overdue!</span>}
-                  <br />Host: {s.host}
                 </div>
               </div>
-              {(currentUserRole === 'Organizer' || canEdit(s)) && (
-                <div className="space-y-1">
-                  <button onClick={() => onResendInvitation(s)} className={`px-2 py-1 text-white text-xs rounded w-full ${isOverdue ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-500 hover:bg-emerald-600'}`}>
-                    {isOverdue ? 'Resend (Overdue)' : 'Resend'}
-                  </button>
-                  {currentUserRole === 'Organizer' && (
-                    <button onClick={() => onDeleteInvited(s.id)} className="px-2 py-1 bg-red-500 text-white text-xs rounded w-full hover:bg-red-600">Delete</button>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -1509,14 +1726,23 @@ function SignupView({ invitation, onSignup }) {
     
     // Initialize to first available date's month
     const getInitialMonth = () => {
-      const available = availableDates.filter(d => d.available && (!d.locked_by_id || d.locked_by_id === 'DELETED'));
+      const available = availableDates.filter(d => {
+        if (!d.available || (d.locked_by_id && d.locked_by_id !== 'DELETED')) return false;
+        // Also check if host is available
+        const hostUnavailable = userAvailability.find(ua => 
+          ua.user_name === speaker.host && 
+          ua.date_id === d.id && 
+          ua.available === false
+        );
+        return !hostUnavailable;
+      });
       if (available.length === 0) return new Date();
       const firstDate = available[0].date?.toDate ? available[0].date.toDate() : new Date(available[0].date);
       return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
     };
     
     const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
-
+  
     if (showConfirmation) {
       return (
         <div className="min-h-screen bg-neutral-50 flex items-center justify-center p-8">
@@ -1586,7 +1812,20 @@ function SignupView({ invitation, onSignup }) {
         return entryDate.getTime() === checkDate.getTime();
       });
   
-      return dateEntry;
+      if (!dateEntry) return null;
+  
+      // Check if host is unavailable for this date
+      const hostUnavailable = userAvailability.find(ua => 
+        ua.user_name === speaker.host && 
+        ua.date_id === dateEntry.id && 
+        ua.available === false
+      );
+  
+      return { 
+        dateEntry, 
+        hostUnavailable: !!hostUnavailable,
+        hostConflictNote: hostUnavailable?.conflictNote || null
+      };
     };
   
     const selectedDate = availableDates.find(d => d.id === selectedDateId);
@@ -1712,7 +1951,7 @@ function SignupView({ invitation, onSignup }) {
                     →
                   </button>
                 </div>
-
+  
                 {/* Day names */}
                 <div className="grid grid-cols-7 gap-1 mb-1">
                   {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
@@ -1721,50 +1960,67 @@ function SignupView({ invitation, onSignup }) {
                     </div>
                   ))}
                 </div>
-
+  
                 {/* Calendar grid */}
                 <div className="grid grid-cols-7 gap-1">
                   {/* Empty cells */}
                   {Array.from({ length: startingDayOfWeek }).map((_, idx) => (
                     <div key={`empty-${idx}`} className="aspect-square"></div>
                   ))}
-
+  
                   {/* Days */}
                   {Array.from({ length: daysInMonth }).map((_, idx) => {
                     const day = idx + 1;
-                    const dateEntry = getDateInfo(day);
+                    const dateInfo = getDateInfo(day);
                     
                     let bgColor = 'bg-neutral-100 text-neutral-400';
                     let cursor = 'cursor-default';
                     let hoverClass = '';
                     
-                    if (dateEntry) {
-                      cursor = 'cursor-pointer';
-                      if (dateEntry.id === selectedDateId) {
-                        bgColor = 'bg-primary text-white';
-                        hoverClass = 'hover:bg-primary/80';
+                    if (dateInfo) {
+                      if (dateInfo.hostUnavailable) {
+                        // Host is unavailable - orange, not clickable
+                        bgColor = 'bg-orange-400 text-white';
+                        cursor = 'cursor-not-allowed';
+                        hoverClass = '';
                       } else {
-                        bgColor = 'bg-green-500 text-white';
-                        hoverClass = 'hover:bg-green-600';
+                        // Available date
+                        cursor = 'cursor-pointer';
+                        if (dateInfo.dateEntry.id === selectedDateId) {
+                          bgColor = 'bg-primary text-white';
+                          hoverClass = 'hover:bg-primary/80';
+                        } else {
+                          bgColor = 'bg-green-500 text-white';
+                          hoverClass = 'hover:bg-green-600';
+                        }
                       }
                     }
-
+  
                     return (
                       <div
                         key={day}
-                        onClick={() => dateEntry && setSelectedDateId(dateEntry.id)}
+                        onClick={() => {
+                          if (dateInfo && !dateInfo.hostUnavailable) {
+                            setSelectedDateId(dateInfo.dateEntry.id);
+                          }
+                        }}
                         className={`aspect-square flex items-center justify-center rounded text-sm ${bgColor} ${cursor} ${hoverClass} transition-colors`}
+                        title={dateInfo?.hostUnavailable ? `Host unavailable: ${dateInfo.hostConflictNote || 'Conflict'}` : ''}
                       >
                         {day}
                       </div>
                     );
                   })}
                 </div>
-
+  
                 <div className="mt-3 text-xs text-neutral-600">
                   <div className="flex items-center gap-2 mb-1">
                     <div className="w-3 h-3 bg-green-500 rounded"></div>
                     <span>Available dates</span>
+                  </div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-3 h-3 bg-orange-400 rounded"></div>
+                    <span>Host unavailable</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 bg-neutral-100 rounded"></div>
@@ -1772,7 +2028,7 @@ function SignupView({ invitation, onSignup }) {
                   </div>
                 </div>
               </div>
-
+  
               {/* Right: Selected Date Info & Available Users */}
               <div className="space-y-4">
                 {selectedDate ? (
@@ -1797,7 +2053,7 @@ function SignupView({ invitation, onSignup }) {
                         )}
                       </div>
                     </div>
-
+  
                     {/* Available Fellows */}
                     <div className="border rounded-lg p-4">
                       <h4 className="font-semibold text-lg mb-3 flex items-center gap-2">
@@ -1824,7 +2080,7 @@ function SignupView({ invitation, onSignup }) {
                           </p>
                         )}
                       </div>
-
+  
                       {/* Unavailable Fellows */}
                       {userAvailability.filter(ua => ua.date_id === selectedDateId && ua.available === false).length > 0 && (
                         <div className="mt-4 pt-4 border-t">
@@ -1836,9 +2092,14 @@ function SignupView({ invitation, onSignup }) {
                             {userAvailability
                               .filter(ua => ua.date_id === selectedDateId && ua.available === false)
                               .map((ua, idx) => (
-                                <div key={idx} className="flex items-center gap-2 text-sm bg-red-50 px-3 py-2 rounded">
-                                  <span className="text-red-600">✗</span>
-                                  <span className="text-neutral-600">{ua.user_name}</span>
+                                <div key={idx} className="flex items-start gap-2 text-sm bg-red-50 px-3 py-2 rounded">
+                                  <span className="text-red-600 mt-0.5">✗</span>
+                                  <div className="flex-1">
+                                    <div className="text-neutral-600 font-medium">{ua.user_name}</div>
+                                    {ua.conflictNote && (
+                                      <div className="text-xs text-red-600 italic mt-1">{ua.conflictNote}</div>
+                                    )}
+                                  </div>
                                 </div>
                               ))}
                           </div>
@@ -1852,6 +2113,9 @@ function SignupView({ invitation, onSignup }) {
                     <p className="text-neutral-600 font-medium">Select a date from the calendar</p>
                     <p className="text-sm text-neutral-500 mt-1">
                       Available dates are shown in green
+                    </p>
+                    <p className="text-sm text-orange-600 mt-1">
+                      Orange dates: Your host is unavailable
                     </p>
                   </div>
                 )}
@@ -1924,12 +2188,36 @@ function SignupView({ invitation, onSignup }) {
     upcomingLunchReminders,
     onAcceptSpeaker, onRejectSpeaker, onResendInvitation, onEditSpeaker,
     onEditConfirmed, onViewActions, onViewAgenda, onGeneratePoster, onDeleteInvited,
-    onVoteSpeaker, currentUser, getRankingColor, getStatusColor, formatDate
+    onVoteSpeaker, onMarkLunchBooked, currentUser, getRankingColor, getStatusColor, formatDate,
+    allUsers, userAvailability
   }) {
     const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
     const [dismissedLunchReminders, setDismissedLunchReminders] = useState(new Set());
+    const [collapsedSpeakers, setCollapsedSpeakers] = useState(new Set());
+    const [viewMode, setViewMode] = useState('collapsed'); // 'expanded' or 'collapsed'
   
-    // Get recent speaker responses (last 7 days)
+    // Initialize all speakers as collapsed
+    useEffect(() => {
+      const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
+      if (viewMode === 'collapsed') {
+        setCollapsedSpeakers(new Set(proposedSpeakers.map(s => s.id)));
+      } else {
+        setCollapsedSpeakers(new Set());
+      }
+    }, [viewMode, speakers]);
+  
+    const toggleSpeaker = (speakerId) => {
+      setCollapsedSpeakers(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(speakerId)) {
+          newSet.delete(speakerId);
+        } else {
+          newSet.add(speakerId);
+        }
+        return newSet;
+      });
+    };
+  
     const getRecentResponses = () => {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -1948,10 +2236,26 @@ function SignupView({ invitation, onSignup }) {
     };
   
     const recentResponses = getRecentResponses();
-    const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
+    
+    // Sort proposed speakers by votes (descending) then by priority
+    const proposedSpeakers = speakers
+      .filter(s => s.status === 'Proposed')
+      .sort((a, b) => {
+        const aVotes = (a.votes || []).length;
+        const bVotes = (b.votes || []).length;
+        
+        // First sort by votes (descending)
+        if (bVotes !== aVotes) {
+          return bVotes - aVotes;
+        }
+        
+        // If votes are equal, sort by priority
+        const priorityOrder = { 'High Priority': 0, 'Medium Priority': 1, 'Low Priority': 2 };
+        return (priorityOrder[a.ranking] || 1) - (priorityOrder[b.ranking] || 1);
+      });
+    
     const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
     
-    // Only show UPCOMING speakers
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const upcomingSpeakers = speakers.filter(s => {
@@ -1961,7 +2265,6 @@ function SignupView({ invitation, onSignup }) {
       return speakerDate >= today;
     });
   
-    // Calculate overdue speakers
     const overdueSpeakers = invitedSpeakers.filter(s => {
       if (!s.response_deadline) return false;
       const deadline = safeToDate(s.response_deadline);
@@ -1973,7 +2276,6 @@ function SignupView({ invitation, onSignup }) {
       return speaker.host === currentUser.full_name;
     };
   
-    // Filter lunch reminders that haven't been dismissed
     const visibleLunchReminders = upcomingLunchReminders 
       ? upcomingLunchReminders.filter(s => !dismissedLunchReminders.has(s.id))
       : [];
@@ -1999,6 +2301,21 @@ function SignupView({ invitation, onSignup }) {
                         </div>
                         <div className="text-xs text-amber-600 mt-1">
                           📍 Don't forget to make lunch reservations!
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id={`lunch-booked-${speaker.id}`}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                onMarkLunchBooked(speaker.id);
+                              }
+                            }}
+                            className="w-4 h-4 text-green-600 border-amber-300 rounded focus:ring-amber-500"
+                          />
+                          <label htmlFor={`lunch-booked-${speaker.id}`} className="text-sm text-amber-800 cursor-pointer">
+                            Mark reservation as booked (disables alert for all users)
+                          </label>
                         </div>
                       </div>
                       <button
@@ -2036,69 +2353,161 @@ function SignupView({ invitation, onSignup }) {
           </div>
         </div>
   
-        {/* Proposed Speakers */}
+        {/* Proposed Speakers - with collapse functionality */}
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-xl font-semibold mb-4 text-neutral-800">
-            Proposed Speakers Awaiting Review ({proposedSpeakers.length})
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-semibold text-neutral-800">
+              Proposed Speakers Awaiting Review ({proposedSpeakers.length})
+            </h3>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setViewMode('expanded')}
+                className={`px-3 py-1 rounded text-sm ${viewMode === 'expanded' ? 'bg-primary text-white' : 'bg-neutral-200 text-neutral-600'}`}
+              >
+                Expand All
+              </button>
+              <button
+                onClick={() => setViewMode('collapsed')}
+                className={`px-3 py-1 rounded text-sm ${viewMode === 'collapsed' ? 'bg-primary text-white' : 'bg-neutral-200 text-neutral-600'}`}
+              >
+                Collapse All
+              </button>
+            </div>
+          </div>
+          
           {proposedSpeakers.length === 0 ? (
             <p className="text-neutral-500 text-center py-8">No proposed speakers</p>
           ) : (
             <div className="space-y-3">
               {proposedSpeakers.map(s => {
+                const isCollapsed = collapsedSpeakers.has(s.id);
                 const userVoted = s.votes?.some(v => v.user_id === currentUser.id);
                 const voteCount = s.votes?.length || 0;
+                
                 return (
-                  <div key={s.id} className="border border-neutral-200 rounded-lg p-4 hover:border-primary transition-colors">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <div className="font-semibold text-lg text-neutral-800">{s.full_name}</div>
-                        <div className="text-sm text-neutral-600 mt-1">
-                          {s.area_of_expertise} • {s.affiliation} • {s.country}
-                        </div>
-                        <div className="text-xs text-neutral-500 mt-2">
-                          Proposed by {s.proposed_by_name} • Host: {s.host}
-                        </div>
-                        {s.notes && (
-                          <div className="text-sm text-neutral-600 mt-2 italic bg-neutral-50 p-2 rounded">
-                            {s.notes}
-                          </div>
-                        )}
-                        <div className="mt-2">
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
+                  <div 
+                    key={s.id} 
+                    className="border border-neutral-200 rounded-lg hover:border-primary transition-colors cursor-pointer"
+                    onClick={() => toggleSpeaker(s.id)}
+                  >
+                    {/* Collapsed View */}
+                    {isCollapsed ? (
+                      <div className="p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-4 flex-1">
+                          <span className="text-neutral-500">▶</span>
+                          <div className="font-semibold">{s.full_name}</div>
+                          <div className="text-sm text-neutral-600">{s.affiliation}</div>
+                          <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
                             {s.ranking}
                           </span>
+                          <div className="px-3 py-1 rounded text-sm font-medium border border-primary text-primary bg-primary/5">
+                            👍 {voteCount}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onVoteSpeaker(s.id, 'upvote');
+                            }}
+                            className={`px-3 py-1 rounded text-sm font-medium ${
+                              userVoted 
+                                ? 'bg-primary text-white' 
+                                : 'border border-primary text-primary hover:bg-primary hover:text-white'
+                            }`}
+                          >
+                            👍 {voteCount}
+                          </button>
+                          {currentUser.role === 'Organizer' && (
+                            <>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onAcceptSpeaker(s.id);
+                                }} 
+                                className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600"
+                              >
+                                Invite
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onRejectSpeaker(s.id);
+                                }} 
+                                className="px-3 py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600"
+                              >
+                                Decline
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 ml-4">
-                        <button
-                          onClick={() => onVoteSpeaker(s.id, 'upvote')}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                            userVoted 
-                              ? 'bg-primary text-white' 
-                              : 'border-2 border-primary text-primary hover:bg-primary hover:text-white'
-                          }`}
-                        >
-                          👍 {voteCount}
-                        </button>
-                        {currentUser.role === 'Organizer' && (
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => onAcceptSpeaker(s.id)} 
-                              className="px-3 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
-                            >
-                              Invite
-                            </button>
-                            <button 
-                              onClick={() => onRejectSpeaker(s.id)} 
-                              className="px-3 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-colors"
-                            >
-                              Decline
-                            </button>
+                    ) : (
+                      /* Expanded View */
+                      <div className="p-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-neutral-500">▼</span>
+                              <div className="font-semibold text-lg text-neutral-800">{s.full_name}</div>
+                            </div>
+                            <div className="text-sm text-neutral-600 mt-1 ml-7">
+                              {s.area_of_expertise} • {s.affiliation} • {s.country}
+                            </div>
+                            <div className="text-xs text-neutral-500 mt-2 ml-7">
+                              Proposed by {s.proposed_by_name} • Host: {s.host}
+                            </div>
+                            {s.notes && (
+                              <div className="text-sm text-neutral-600 mt-2 italic bg-neutral-50 p-2 rounded ml-7">
+                                {s.notes}
+                              </div>
+                            )}
+                            <div className="mt-2 ml-7">
+                              <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
+                                {s.ranking}
+                              </span>
+                            </div>
                           </div>
-                        )}
+                          <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onVoteSpeaker(s.id, 'upvote');
+                              }}
+                              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                userVoted 
+                                  ? 'bg-primary text-white' 
+                                  : 'border-2 border-primary text-primary hover:bg-primary hover:text-white'
+                              }`}
+                            >
+                              👍 {voteCount}
+                            </button>
+                            {currentUser.role === 'Organizer' && (
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onAcceptSpeaker(s.id);
+                                  }} 
+                                  className="px-3 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
+                                >
+                                  Invite
+                                </button>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRejectSpeaker(s.id);
+                                  }} 
+                                  className="px-3 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-colors"
+                                >
+                                  Decline
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 );
               })}
@@ -2119,10 +2528,13 @@ function SignupView({ invitation, onSignup }) {
             formatDate={formatDate}
             canEdit={(s) => canEditSpeaker(s)}
             currentUserRole={currentUser.role}
+            allUsers={allUsers}
+            userAvailability={userAvailability}
+            availableDates={availableDates}
           />
         </div>
   
-        {/* Confirmed Upcoming Speakers */}
+        {/* Confirmed Upcoming Speakers - with travel arrangements highlighting */}
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-xl font-semibold mb-4 text-neutral-800">
             Confirmed Upcoming Speakers ({upcomingSpeakers.length})
@@ -2138,30 +2550,44 @@ function SignupView({ invitation, onSignup }) {
                     <th className="text-left py-3 px-4 font-semibold text-neutral-700">Title</th>
                     <th className="text-left py-3 px-4 font-semibold text-neutral-700">Date</th>
                     <th className="text-left py-3 px-4 font-semibold text-neutral-700">Host</th>
+                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Travel</th>
                     <th className="text-left py-3 px-4 font-semibold text-neutral-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {upcomingSpeakers.map(s => (
-                    <tr key={s.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                      <td className="py-3 px-4">{s.full_name}</td>
-                      <td className="py-3 px-4">{s.talk_title || '(TBC)'}</td>
-                      <td className="py-3 px-4">{formatDate(s.assigned_date)}</td>
-                      <td className="py-3 px-4">{s.host}</td>
-                      <td className="py-3 px-4">
-                        {canEditSpeaker(s) && (
-                          <div className="flex gap-2">
-                            <button onClick={() => onViewAgenda(s)} className="px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600">Agenda</button>
-                            <button onClick={() => onEditConfirmed(s)} className="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Edit</button>
-                            <button onClick={() => onViewActions(s)} className="px-3 py-1 bg-sky-500 text-white rounded text-xs hover:bg-sky-600">Actions</button>
-                          </div>
-                        )}
-                        {!canEditSpeaker(s) && (
-                          <span className="text-xs text-neutral-400">Host only</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {upcomingSpeakers.map(s => {
+                    const hasTravelArrangements = s.actions?.some(a => 
+                      a.type === 'travel_arrangements' && a.completed
+                    );
+                    
+                    return (
+                      <tr key={s.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${!hasTravelArrangements ? 'bg-amber-50' : ''}`}>
+                        <td className="py-3 px-4">{s.full_name}</td>
+                        <td className="py-3 px-4">{s.talk_title || '(TBC)'}</td>
+                        <td className="py-3 px-4">{formatDate(s.assigned_date)}</td>
+                        <td className="py-3 px-4">{s.host}</td>
+                        <td className="py-3 px-4">
+                          {hasTravelArrangements ? (
+                            <span className="text-green-600 font-semibold">✓ Arranged</span>
+                          ) : (
+                            <span className="text-amber-600 font-semibold">⚠ Pending</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          {canEditSpeaker(s) && (
+                            <div className="flex gap-2">
+                              <button onClick={() => onViewAgenda(s)} className="px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600">Agenda</button>
+                              <button onClick={() => onEditConfirmed(s)} className="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Edit</button>
+                              <button onClick={() => onViewActions(s)} className="px-3 py-1 bg-sky-500 text-white rounded text-xs hover:bg-sky-600">Actions</button>
+                            </div>
+                          )}
+                          {!canEditSpeaker(s) && (
+                            <span className="text-xs text-neutral-400">Host only</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2238,19 +2664,20 @@ function SignupView({ invitation, onSignup }) {
   }
 
 /* ---------------------
-   AvailabilityView - Calendar Style with Side Panel
+   AvailabilityView - Updated with conflict support
    --------------------- */
    function AvailabilityView({ dates, userAvailability, currentUser, onUpdateAvailability, formatDate }) {
-    // Initialize to first available date's month
-    const getInitialMonth = () => {
+    const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
+    const [selectedDate, setSelectedDate] = useState(null);
+    const [showDateModal, setShowDateModal] = useState(false);
+    const [conflictNote, setConflictNote] = useState('');
+    const [availabilityChoice, setAvailabilityChoice] = useState('available');
+    
+    function getInitialMonth() {
       if (dates.length === 0) return new Date();
       const firstDate = dates[0].date?.toDate ? dates[0].date.toDate() : new Date(dates[0].date);
       return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
-    };
-    
-    const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
-     
-    if (!dates) return <div>Loading dates...</div>;
+    }
   
     const getDaysInMonth = (date) => {
       const year = date.getFullYear();
@@ -2259,19 +2686,10 @@ function SignupView({ invitation, onSignup }) {
       const lastDay = new Date(year, month + 1, 0);
       const daysInMonth = lastDay.getDate();
       const startingDayOfWeek = firstDay.getDay();
-      
       return { daysInMonth, startingDayOfWeek, year, month };
     };
   
     const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth);
-  
-    const previousMonth = () => {
-      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
-    };
-  
-    const nextMonth = () => {
-      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
-    };
   
     const getDateInfo = (day) => {
       const checkDate = new Date(year, month, day);
@@ -2286,17 +2704,68 @@ function SignupView({ invitation, onSignup }) {
       if (!dateEntry) return null;
   
       const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === dateEntry.id);
-      const available = ua ? ua.available : true;
-  
-      return { dateEntry, available };
+      
+      return { 
+        dateEntry, 
+        available: ua ? ua.available : true,
+        conflictNote: ua?.conflictNote || null
+      };
     };
   
     const handleDateClick = (day) => {
-      const dateInfo = getDateInfo(day);
-      if (dateInfo) {
-        onUpdateAvailability(dateInfo.dateEntry.id, !dateInfo.available);
+      const checkDate = new Date(year, month, day);
+      setSelectedDate(checkDate);
+      
+      // Pre-fill existing data if available
+      const checkDateString = checkDate.toISOString().split('T')[0];
+      const dateEntry = dates.find(d => {
+        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        return entryDate.toISOString().split('T')[0] === checkDateString;
+      });
+      
+      if (dateEntry) {
+        const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === dateEntry.id);
+        if (ua) {
+          setAvailabilityChoice(ua.conflictNote ? 'conflict' : (ua.available ? 'available' : 'unavailable'));
+          setConflictNote(ua.conflictNote || '');
+        } else {
+          setAvailabilityChoice('available');
+          setConflictNote('');
+        }
       }
+      
+      setShowDateModal(true);
     };
+  
+    const handleSaveAvailability = () => {
+      const checkDate = selectedDate;
+      checkDate.setHours(0, 0, 0, 0);
+      
+      const dateEntry = dates.find(d => {
+        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        entryDate.setHours(0, 0, 0, 0);
+        return entryDate.getTime() === checkDate.getTime();
+      });
+  
+      if (dateEntry) {
+        const isAvailable = availabilityChoice === 'available';
+        const note = availabilityChoice === 'conflict' ? conflictNote : null;
+        onUpdateAvailability(dateEntry.id, isAvailable, note);
+      } else {
+        alert('This date needs to be added to available dates first');
+      }
+      
+      setShowDateModal(false);
+      setSelectedDate(null);
+      setConflictNote('');
+      setAvailabilityChoice('available');
+    };
+    
+    // Filter to only show unavailable dates
+    const unavailableDates = dates.filter(d => {
+      const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === d.id);
+      return ua && ua.available === false;
+    });
   
     return (
       <div className="bg-white rounded-lg shadow p-6">
@@ -2310,7 +2779,11 @@ function SignupView({ invitation, onSignup }) {
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-orange-500 rounded"></div>
-            <span>Unavailable</span>
+            <span>Conflicting date</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-blue-500 rounded"></div>
+            <span>Locked (speaker assigned)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-neutral-200 rounded"></div>
@@ -2318,24 +2791,23 @@ function SignupView({ invitation, onSignup }) {
           </div>
         </div>
   
-        {/* Two Column Layout */}
         <div className="grid grid-cols-2 gap-6">
-          {/* Left: Calendar - Smaller */}
+          {/* Left: Calendar */}
           <div className="border rounded-lg p-4">
-            {/* Header */}
             <div className="flex justify-between items-center mb-4">
-              <button onClick={previousMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+              <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1))} 
+                className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
                 ←
               </button>
               <h3 className="text-base font-semibold">
                 {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
               </h3>
-              <button onClick={nextMonth} className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
+              <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1))} 
+                className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
                 →
               </button>
             </div>
   
-            {/* Day names */}
             <div className="grid grid-cols-7 gap-1 mb-2">
               {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
                 <div key={idx} className="text-center font-semibold text-xs text-neutral-600 py-1">
@@ -2344,29 +2816,38 @@ function SignupView({ invitation, onSignup }) {
               ))}
             </div>
   
-            {/* Calendar grid */}
             <div className="grid grid-cols-7 gap-1">
-              {/* Empty cells for days before month starts */}
               {Array.from({ length: startingDayOfWeek }).map((_, idx) => (
                 <div key={`empty-${idx}`} className="aspect-square"></div>
               ))}
   
-              {/* Days of the month */}
               {Array.from({ length: daysInMonth }).map((_, idx) => {
                 const day = idx + 1;
                 const dateInfo = getDateInfo(day);
                 
                 let bgColor = 'bg-neutral-100';
-                let cursor = 'cursor-default';
-                let hoverClass = '';
+                let textColor = '';
+                let cursor = 'cursor-pointer';
+                let hoverClass = 'hover:bg-neutral-200';
                 
                 if (dateInfo) {
-                  cursor = 'cursor-pointer';
-                  if (dateInfo.available) {
-                    bgColor = 'bg-green-500 text-white';
+                  if (!dateInfo.dateEntry.available) {
+                    // Locked by speaker
+                    bgColor = 'bg-blue-500';
+                    textColor = 'text-white';
+                    hoverClass = 'hover:bg-blue-600';
+                  } else if (dateInfo.conflictNote) {
+                    // Has conflict
+                    bgColor = 'bg-orange-500';
+                    textColor = 'text-white';
+                    hoverClass = 'hover:bg-orange-600';
+                  } else if (dateInfo.available) {
+                    bgColor = 'bg-green-500';
+                    textColor = 'text-white';
                     hoverClass = 'hover:bg-green-600';
                   } else {
-                    bgColor = 'bg-orange-500 text-white';
+                    bgColor = 'bg-orange-500';
+                    textColor = 'text-white';
                     hoverClass = 'hover:bg-orange-600';
                   }
                 }
@@ -2374,8 +2855,8 @@ function SignupView({ invitation, onSignup }) {
                 return (
                   <div
                     key={day}
-                    onClick={() => dateInfo && handleDateClick(day)}
-                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${cursor} ${hoverClass} transition-colors`}
+                    onClick={() => handleDateClick(day)}
+                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${textColor} ${cursor} ${hoverClass} transition-colors`}
                   >
                     {day}
                   </div>
@@ -2384,21 +2865,33 @@ function SignupView({ invitation, onSignup }) {
             </div>
           </div>
   
-          {/* Right: Scrollable List of Upcoming Seminars */}
+          {/* Right: Unavailable Dates Only */}
           <div className="border rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-4">Upcoming Seminars</h3>
-            {dates.length === 0 ? (
-              <p className="text-sm text-neutral-500 text-center py-8">No upcoming seminars scheduled.</p>
+            <h3 className="text-lg font-semibold mb-4">Unavailable Dates</h3>
+            {unavailableDates.length === 0 ? (
+              <p className="text-sm text-neutral-500 text-center py-8">You have no unavailable dates marked.</p>
             ) : (
               <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
-                {dates.map(d => {
+                {unavailableDates.map(d => {
                   const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === d.id);
-                  const available = ua ? ua.available : true;
+                  const conflictNote = ua?.conflictNote || null;
+                  const isLocked = !d.available;
+                  
+                  let bgColor = 'bg-orange-50 border-orange-200';
+                  let statusColor = 'bg-orange-100 text-orange-800';
+                  let statusText = '✗ Unavailable';
+                  
+                  if (conflictNote) {
+                    statusText = '⚠ Conflict';
+                  }
+                  
                   return (
-                    <div key={d.id} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
+                    <div key={d.id} className={`border rounded-lg p-3 ${bgColor}`}>
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
-                          <div className="font-semibold text-base">{formatDate(d.date)}</div>
+                          <div className="font-semibold text-base bg-white inline-block px-2 py-1 rounded">
+                            {formatDate(d.date)}
+                          </div>
                           <div className="text-sm text-neutral-600 mt-1">
                             <strong>Host:</strong> {d.host}
                           </div>
@@ -2407,17 +2900,27 @@ function SignupView({ invitation, onSignup }) {
                               📍 {d.notes}
                             </div>
                           )}
+                          {conflictNote && (
+                            <div className="text-xs text-orange-700 mt-2 bg-white p-2 rounded italic">
+                              <strong>Your conflict:</strong> {conflictNote}
+                            </div>
+                          )}
                         </div>
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${available ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'}`}>
-                          {available ? '✓ Available' : '✗ Unavailable'}
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColor}`}>
+                          {statusText}
                         </span>
                       </div>
-                      <button 
-                        onClick={() => onUpdateAvailability(d.id, !available)} 
-                        className="w-full px-3 py-2 bg-primary text-white rounded text-sm hover:bg-primary/80 transition-colors"
-                      >
-                        {available ? 'Mark Unavailable' : 'Mark Available'}
-                      </button>
+                      {!isLocked && (
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUpdateAvailability(d.id, true, null);
+                          }}
+                          className="w-full px-3 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
+                        >
+                          Mark as Available
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -2425,16 +2928,86 @@ function SignupView({ invitation, onSignup }) {
             )}
           </div>
         </div>
+  
+        {/* Date Selection Modal */}
+        {showDateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white rounded-lg shadow-xl p-6 w-96">
+              <h3 className="text-lg font-semibold mb-4">
+                Set Availability for {selectedDate?.toLocaleDateString()}
+              </h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="radio" 
+                      name="availability" 
+                      value="available"
+                      checked={availabilityChoice === 'available'}
+                      onChange={(e) => {
+                        setAvailabilityChoice('available');
+                        setConflictNote('');
+                      }}
+                    />
+                    <span className="text-green-600 font-medium">Available</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="radio" 
+                      name="availability" 
+                      value="conflict"
+                      checked={availabilityChoice === 'conflict'}
+                      onChange={(e) => setAvailabilityChoice('conflict')}
+                    />
+                    <span className="text-orange-600 font-medium">Unavailable due to conflict</span>
+                  </label>
+                  {availabilityChoice === 'conflict' && (
+                    <textarea
+                      className="w-full mt-2 border rounded px-3 py-2 text-sm min-h-[80px]"
+                      placeholder="Explain the conflict..."
+                      value={conflictNote}
+                      onChange={(e) => setConflictNote(e.target.value)}
+                      rows={3}
+                    />
+                  )}
+                </div>
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={handleSaveAvailability}
+                    className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowDateModal(false);
+                      setSelectedDate(null);
+                      setConflictNote('');
+                      setAvailabilityChoice('available');
+                    }}
+                    className="flex-1 px-4 py-2 border rounded hover:bg-neutral-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
 /* ---------------------
-   StatisticsView (charts and past speakers)
+   StatisticsView with Modals (keeping bar charts)
    --------------------- */
    function StatisticsView({ speakers, formatDate, onAddPastSpeaker, isOrganizer }) {
     const [selectedYear, setSelectedYear] = useState('all');
     const [collapsedYears, setCollapsedYears] = useState(new Set());
+    const [showCountriesModal, setShowCountriesModal] = useState(false);
+    const [showAffiliationsModal, setShowAffiliationsModal] = useState(false);
     
     const acceptedSpeakers = speakers.filter(s => s.status === 'Accepted');
     
@@ -2456,7 +3029,14 @@ function SignupView({ invitation, onSignup }) {
       });
     };
   
-    // Filter speakers by selected year
+    // Smooth scroll to speakers section
+    const scrollToSpeakers = () => {
+      const element = document.getElementById('speakers-by-year-section');
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+  
     const filteredSpeakers = selectedYear === 'all' 
       ? acceptedSpeakers 
       : acceptedSpeakers.filter(s => getYearFromDate(s.assigned_date) === parseInt(selectedYear));
@@ -2490,48 +3070,133 @@ function SignupView({ invitation, onSignup }) {
       .slice(0, 10)
       .map(([country, count]) => ({ country, count }));
   
-    const uniqueAffiliations = new Set(
-      filteredSpeakers
-        .map(s => s.affiliation)
-        .filter(a => a && a.trim())
-    );
-    const affiliationCount = uniqueAffiliations.size;
-  
-    const getRegion = (country) => {
-      if (!country) return 'Unknown';
-      if (country === 'Spain') return 'Spain';
-      
-      const europeanCountries = ['Austria', 'Belgium', 'Denmark', 'France', 'Germany', 'Italy', 
-        'Netherlands', 'Switzerland', 'United Kingdom', 'Sweden', 'Norway', 'Bulgaria', 'Croatia', 
-        'Cyprus', 'Czech Republic', 'Estonia', 'Finland', 'Greece', 'Hungary', 'Ireland', 'Latvia', 
-        'Lithuania', 'Luxembourg', 'Malta', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia'];
-      if (europeanCountries.includes(country)) return 'Europe (excl. Spain)';
-      
-      const northAmerica = ['United States', 'Canada', 'Mexico'];
-      if (northAmerica.includes(country)) return 'North America';
-      
-      const asia = ['China', 'Japan', 'India', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines'];
-      if (asia.includes(country)) return 'Asia';
-      
-      const oceania = ['Australia', 'New Zealand'];
-      if (oceania.includes(country)) return 'Oceania';
-      
-      return 'Other';
-    };
-  
-    const regionData = filteredSpeakers.reduce((acc, s) => {
-      const region = getRegion(s.country);
-      acc[region] = (acc[region] || 0) + 1;
+    const affiliationsData = filteredSpeakers.reduce((acc, s) => {
+      if (s.affiliation && s.affiliation.trim()) {
+        if (!acc[s.affiliation]) {
+          acc[s.affiliation] = [];
+        }
+        acc[s.affiliation].push(s.full_name);
+      }
       return acc;
     }, {});
   
-    const regionChartData = Object.entries(regionData).map(([region, count]) => ({
-      name: region,
-      value: count
-    }));
+    const uniqueAffiliations = Object.keys(affiliationsData).sort();
+    const affiliationCount = uniqueAffiliations.length;
   
-    const COLORS = ['#d63447', '#3498db', '#e67e22', '#f1c40f', '#2ecc71', '#95a5a6'];
+    // CONTINENT MAPPING using country codes (more reliable)
+    const getContinent = (countryName) => {
+      if (!countryName) return 'Unknown';
+      
+      // Try to get country code from country name
+      let countryCode;
+      try {
+        countryCode = getCode(countryName);
+      } catch (e) {
+        // If getCode fails, try manual lookup
+        countryCode = null;
+      }
+      
+      // If we couldn't get a code, try some manual mappings for country-list format
+      if (!countryCode) {
+        const normalized = countryName.toLowerCase().trim();
+        const manualMappings = {
+          // Common short names
+          'united kingdom': 'GB',
+          'uk': 'GB',
+          'united states': 'US',
+          'usa': 'US',
+          'us': 'US',
+          // Other common variatio  ns
+          'south korea': 'KR',
+          'north korea': 'KP',
+          'russia': 'RU',
+          'czechia': 'CZ',
+                
+          // Official country-list names
+          'united states of america (the)': 'US',
+          'united kingdom of great britain and northern ireland (the)': 'GB',
+          'netherlands (the)': 'NL',
+          'philippines (the)': 'PH',
+          'russian federation (the)': 'RU',
+          'czech republic (the)': 'CZ',
+          'republic of korea': 'KR',
+          "korea (the republic of)": 'KR',
+          "democratic people's republic of korea": 'KP',
+
+        };
+        countryCode = manualMappings[normalized];
+      }
+      
+      if (!countryCode) {
+        console.warn(`⚠️ Could not find country code for: "${countryName}"`);
+        return 'Other';
+      }
+      
+      // Spain gets its own category
+      if (countryCode === 'ES') return 'Spain';
+      
+      // Europe (excluding Spain)
+      const europe = [
+        'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 
+        'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 
+        'PL', 'PT', 'RO', 'SK', 'SI', 'SE', 'GB', 'NO', 'CH', 'IS',
+        'AL', 'RS', 'BA', 'ME', 'MK', 'RU', 'UA', 'BY', 'MD', 'LI', 'MC',
+      ];
+      if (europe.includes(countryCode)) return 'Europe\n(excl. Spain)';
+      
+      // North America
+      const northAmerica = ['US', 'CA', 'MX'];
+      if (northAmerica.includes(countryCode)) return 'North America';
+      
+      // South America
+      const southAmerica = [
+        'BR', 'AR', 'CL', 'CO', 'PE', 'VE', 'EC', 'BO', 'PY', 'UY', 
+        'GY', 'SR', 'GF'
+      ];
+      if (southAmerica.includes(countryCode)) return 'South America';
+      
+      // Asia & Middle East
+      const asia = [
+        'CN', 'JP', 'IN', 'KR', 'SG', 'TH', 'VN', 'ID', 'MY', 'PH', 
+        'PK', 'BD', 'TW', 'HK', 'IL', 'AE', 'SA', 'TR', 'IR', 'IQ', 
+        'JO', 'LB', 'SY', 'YE', 'OM', 'KW', 'QA', 'BH', 'AF', 'MM', 
+        'KH', 'LA', 'NP', 'LK', 'MN', 'KZ', 'UZ', 'AZ', 'AM', 'GE',
+        'TJ', 'TM', 'KG'
+      ];
+      if (asia.includes(countryCode)) return 'Asia';
+      
+      // Africa
+      const africa = [
+        'ZA', 'EG', 'NG', 'KE', 'MA', 'TN', 'DZ', 'GH', 'ET', 'TZ', 
+        'UG', 'ZW', 'BW', 'NA', 'ZM', 'MZ', 'AO', 'SD', 'LY', 'SN', 
+        'CI', 'CM', 'MG', 'RW', 'SO', 'CD', 'CG'
+      ];
+      if (africa.includes(countryCode)) return 'Africa';
+      
+      // Oceania
+      const oceania = [
+        'AU', 'NZ', 'FJ', 'PG', 'WS', 'TO', 'VU', 'SB'
+      ];
+      if (oceania.includes(countryCode)) return 'Oceania';
+      
+      console.warn(`⚠️ Unmapped country code: ${countryCode} (${countryName})`);
+      return 'Other';
+    };
   
+    // Create continent data
+    const continentData = filteredSpeakers.reduce((acc, s) => {
+      const continent = getContinent(s.country);
+      acc[continent] = (acc[continent] || 0) + 1;
+      return acc;
+    }, {});
+  
+    // Convert to chart format
+    const continentChartData = Object.entries(continentData)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value); // Sort by count descending
+  
+    const COLORS = ['#d63447', '#3498db', '#e67e22', '#f1c40f', '#2ecc71', '#95a5a6', '#9b59b6', '#1abc9c'];
+    
     const handleExportCSV = () => {
       const headers = ['Name', 'Affiliation', 'Country', 'Email', 'Date', 'Talk Title', 'Host', 'Area of Expertise'];
       const rows = filteredSpeakers
@@ -2640,17 +3305,36 @@ function SignupView({ invitation, onSignup }) {
             </h3>
             
             <div style={styles.statsGrid}>
-              <div style={styles.statCard}>
+              <div 
+                style={{...styles.statCard, cursor: 'pointer'}} 
+                onClick={scrollToSpeakers}
+                title="Click to jump to speakers list"
+              >
                 <div style={styles.statNumber}>{filteredSpeakers.length}</div>
                 <div style={styles.statLabel}>Total Speakers</div>
+                <div style={{fontSize: '12px', marginTop: '5px', color: '#3498db'}}>
+                  (Click to view list ↓)
+                </div>
               </div>
-              <div style={styles.statCard}>
+              <div 
+                style={{...styles.statCard, cursor: 'pointer'}} 
+                onClick={() => setShowCountriesModal(true)}
+              >
                 <div style={styles.statNumber}>{Object.keys(countryData).length}</div>
                 <div style={styles.statLabel}>Countries</div>
+                <div style={{fontSize: '12px', marginTop: '5px', color: '#3498db'}}>
+                  (Click to view list)
+                </div>
               </div>
-              <div style={styles.statCard}>
+              <div 
+                style={{...styles.statCard, cursor: 'pointer'}} 
+                onClick={() => setShowAffiliationsModal(true)}
+              >
                 <div style={styles.statNumber}>{affiliationCount}</div>
                 <div style={styles.statLabel}>Different Affiliations</div>
+                <div style={{fontSize: '12px', marginTop: '5px', color: '#3498db'}}>
+                  (Click to view list)
+                </div>
               </div>
               <div style={styles.statCard}>
                 <div style={styles.statNumber}>
@@ -2661,44 +3345,82 @@ function SignupView({ invitation, onSignup }) {
             </div>
   
             <div style={styles.chartsGrid}>
-              {selectedYear === 'all' && (
-                <div style={styles.chartBox}>
-                  <h3 style={styles.chartTitle}>Speakers by Year</h3>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={yearData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="year" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#3498db" radius={[8, 8, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-  
+            {selectedYear === 'all' && (
               <div style={styles.chartBox}>
-                <h3 style={styles.chartTitle}>Distribution by Region</h3>
+                <h3 style={styles.chartTitle}>Speakers by Year</h3>
                 <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={regionChartData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {regionChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
+                  <BarChart data={yearData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="year" />
+                    <YAxis />
                     <Tooltip />
-                  </PieChart>
+                    <Bar dataKey="count" fill="#3498db" radius={[8, 8, 0, 0]} />
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
+            )}
+            <div style={styles.chartBox}>
+              <h3 style={styles.chartTitle}>Distribution by Continent</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={continentChartData}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={({cx, cy, midAngle, innerRadius, outerRadius, percent, name}) => {
+                      const RADIAN = Math.PI / 180;
+                      const radius = outerRadius + 25;
+                      const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                      const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                      const percentText = `${(percent * 100).toFixed(0)}%`;
+                      
+                      // Check if name contains line break
+                      const lines = name.split('\n');
+                      
+                      if (lines.length > 1) {
+                        return (
+                          <text 
+                            x={x} 
+                            y={y} 
+                            fill="black" 
+                            textAnchor={x > cx ? 'start' : 'end'} 
+                            dominantBaseline="central"
+                            fontSize="12"
+                          >
+                            <tspan x={x} dy="-0.6em">{lines[0]}</tspan>
+                            <tspan x={x} dy="1.2em">{lines[1]} {percentText}</tspan>
+                          </text>
+                        );
+                      }
+                      
+                      // Single line
+                      return (
+                        <text 
+                          x={x} 
+                          y={y} 
+                          fill="black" 
+                          textAnchor={x > cx ? 'start' : 'end'} 
+                          dominantBaseline="central"
+                          fontSize="12"
+                        >
+                          {name} {percentText}
+                        </text>
+                      );
+                    }}
+                    outerRadius={80}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {continentChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
+          </div>
   
             {topCountries.length > 0 && (
               <div style={{...styles.chartBox, marginTop: '25px'}}>
@@ -2717,7 +3439,66 @@ function SignupView({ invitation, onSignup }) {
           </div>
         </div>
   
-        <div style={styles.section}>
+        {/* Countries Modal */}
+        {showCountriesModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
+              <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
+                <h3 className="text-xl font-semibold">Countries ({Object.keys(countryData).length})</h3>
+                <button 
+                  onClick={() => setShowCountriesModal(false)}
+                  className="text-white hover:text-neutral-200"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto max-h-[60vh]">
+                <div className="grid grid-cols-3 gap-4">
+                  {Object.entries(countryData)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([country, count]) => (
+                      <div key={country} className="border rounded-lg p-3 hover:bg-neutral-50">
+                        <div className="font-semibold">{country}</div>
+                        <div className="text-sm text-neutral-600">{count} speaker{count !== 1 ? 's' : ''}</div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+  
+        {/* Affiliations Modal */}
+        {showAffiliationsModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
+              <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
+                <h3 className="text-xl font-semibold">Different Affiliations ({uniqueAffiliations.length})</h3>
+                <button 
+                  onClick={() => setShowAffiliationsModal(false)}
+                  className="text-white hover:text-neutral-200"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto max-h-[60vh]">
+                <div className="space-y-3">
+                  {uniqueAffiliations.map(affiliation => (
+                    <div key={affiliation} className="border rounded-lg p-4 hover:bg-neutral-50">
+                      <div className="font-semibold mb-2">{affiliation}</div>
+                      <div className="text-sm text-neutral-600">
+                        Speakers: {affiliationsData[affiliation].join(', ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+  
+        {/* Speakers by Year section */}
+        <div id="speakers-by-year-section" style={styles.section}>
           <h3 style={styles.subsectionTitle}>
             {selectedYear === 'all' ? 'All Speakers by Year' : `Speakers in ${selectedYear}`}
           </h3>
@@ -2782,7 +3563,7 @@ function SignupView({ invitation, onSignup }) {
 /* ---------------------
    DatesView - Updated to match AvailabilityView layout
    --------------------- */
-   function DatesView({ dates, speakers, onAddDate, onDeleteDate, formatDate }) {
+   function DatesView({ dates, speakers, onAddDateDirect, onDeleteDate, formatDate }) {
     const getInitialMonth = () => {
       if (dates.length === 0) return new Date();
       const firstDate = dates[0].date?.toDate ? dates[0].date.toDate() : new Date(dates[0].date);
@@ -2790,6 +3571,12 @@ function SignupView({ invitation, onSignup }) {
     };
     
     const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
+    const [showAddDateModal, setShowAddDateModal] = useState(false);
+    const [showEditDateModal, setShowEditDateModal] = useState(false);
+    const [selectedDate, setSelectedDate] = useState(null);
+    const [selectedDateEntry, setSelectedDateEntry] = useState(null);
+    const [dateType, setDateType] = useState('available');
+    const [dateNotes, setDateNotes] = useState('');
   
     const getDaysInMonth = (date) => {
       const year = date.getFullYear();
@@ -2829,16 +3616,81 @@ function SignupView({ invitation, onSignup }) {
     const getSpeakerForDate = (dateEntry) => {
       if (!dateEntry.locked_by_id || dateEntry.locked_by_id === 'DELETED') return null;
       const speaker = speakers.find(s => s.id === dateEntry.locked_by_id);
-      return speaker ? speaker.full_name : 'Unknown';
+      return speaker;
+    };
+    
+    const handleDateClick = (day) => {
+      const checkDate = new Date(year, month, day);
+      const existing = getDateInfo(day);
+      
+      if (existing) {
+        // Existing date - show in right panel and allow editing
+        setSelectedDateEntry(existing);
+        setSelectedDate(null);
+      } else {
+        // New date - show add modal
+        setSelectedDate(checkDate);
+        setDateType('available');
+        setDateNotes('');
+        setShowAddDateModal(true);
+      }
+    };
+    
+    const handleSaveDate = () => {
+      if (!selectedDate) return;
+      
+      const dateToSave = new Date(selectedDate);
+      dateToSave.setHours(12, 0, 0, 0);
+      
+      onAddDateDirect({
+        date: dateToSave.toISOString().split('T')[0],
+        type: dateType,
+        host: '', // No host when adding
+        notes: dateNotes
+      });
+      
+      setShowAddDateModal(false);
+      setSelectedDate(null);
+      setDateType('available');
+      setDateNotes('');
+    };
+  
+    const handleEditDate = () => {
+      if (!selectedDateEntry) return;
+      
+      // Determine the action based on the new status
+      if (dateType === 'delete') {
+        onDeleteDate(selectedDateEntry.id);
+        setSelectedDateEntry(null);
+      } else {
+        // Update the date status
+        const updateData = {
+          is_conflicting: dateType === 'conflicting',
+          available: dateType === 'available',
+          notes: dateNotes
+        };
+        
+        // Call update handler
+        handleUpdateDate(selectedDateEntry.id, updateData);
+      }
+      
+      setShowEditDateModal(false);
+    };
+  
+    const handleUpdateDate = async (dateId, updateData) => {
+      try {
+        await updateDoc(doc(db, 'available_dates', dateId), updateData);
+        // Reload dates - trigger parent refresh
+        window.location.reload();
+      } catch (err) {
+        alert('Error updating date: ' + (err.message || err));
+      }
     };
   
     return (
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-6">
+        <div className="mb-6">
           <h2 className="text-2xl font-semibold">Available Dates</h2>
-          <button onClick={onAddDate} className="px-4 py-2 bg-primary text-white rounded hover:bg-primary/80">
-            + Add Date
-          </button>
         </div>
         
         {/* Legend */}
@@ -2848,7 +3700,11 @@ function SignupView({ invitation, onSignup }) {
             <span>Available</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-red-500 rounded"></div>
+            <div className="w-4 h-4 bg-orange-500 rounded"></div>
+            <span>Conflicting/Unavailable</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-blue-500 rounded"></div>
             <span>Locked (speaker assigned)</span>
           </div>
           <div className="flex items-center gap-2">
@@ -2897,88 +3753,302 @@ function SignupView({ invitation, onSignup }) {
                 
                 let bgColor = 'bg-neutral-100';
                 let textColor = '';
+                let cursor = 'cursor-pointer';
+                let hoverClass = 'hover:bg-neutral-200';
                 
                 if (dateEntry) {
-                  if (dateEntry.available) {
+                  cursor = 'cursor-pointer';
+                  if (!dateEntry.available && dateEntry.locked_by_id && dateEntry.locked_by_id !== 'DELETED') {
+                    // Locked by speaker
+                    bgColor = 'bg-blue-500';
+                    textColor = 'text-white';
+                    hoverClass = 'hover:bg-blue-600';
+                  } else if (dateEntry.is_conflicting || !dateEntry.available) {
+                    // Conflicting date
+                    bgColor = 'bg-orange-500';
+                    textColor = 'text-white';
+                    hoverClass = 'hover:bg-orange-600';
+                  } else {
+                    // Available
                     bgColor = 'bg-green-500';
                     textColor = 'text-white';
-                  } else {
-                    bgColor = 'bg-red-500';
-                    textColor = 'text-white';
+                    hoverClass = 'hover:bg-green-600';
+                  }
+                  
+                  // Highlight if selected
+                  if (selectedDateEntry?.id === dateEntry.id) {
+                    bgColor += ' ring-4 ring-primary';
                   }
                 }
   
                 return (
                   <div
                     key={day}
-                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${textColor}`}
+                    onClick={() => handleDateClick(day)}
+                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${textColor} ${cursor} ${hoverClass} transition-all`}
                   >
                     {day}
                   </div>
                 );
               })}
             </div>
+            
+            <p className="text-xs text-neutral-500 mt-3 text-center">
+              Click on dates to view/edit or add new
+            </p>
           </div>
   
-          {/* Right: Scrollable List of All Dates */}
+          {/* Right: Selected Date Info */}
           <div className="border rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-4">All Scheduled Dates</h3>
-            {dates.length === 0 ? (
-              <p className="text-sm text-neutral-500 text-center py-8">No dates scheduled yet.</p>
-            ) : (
-              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
-                {dates.map(d => {
-                  const speakerName = getSpeakerForDate(d);
-                  const isLocked = !d.available;
-                  
-                  return (
-                    <div key={d.id} className={`border rounded-lg p-3 ${isLocked ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="font-semibold text-base">{formatDate(d.date)}</div>
-                          <div className="text-sm text-neutral-600 mt-1">
-                            <strong>Host:</strong> {d.host}
-                          </div>
-                          {d.notes && (
-                            <div className="text-xs text-neutral-500 mt-1">
-                              📍 {d.notes}
-                            </div>
-                          )}
-                          {speakerName && (
-                            <div className="text-xs text-red-700 font-semibold mt-1">
-                              🔒 Locked by: {speakerName}
-                            </div>
-                          )}
-                          {d.talk_title && (
-                            <div className="text-xs text-neutral-600 mt-1 italic">
-                              "{d.talk_title}"
-                            </div>
-                          )}
+            <h3 className="text-lg font-semibold mb-4">Date Information</h3>
+            {selectedDateEntry ? (
+              <div className="space-y-4">
+                {/* Date Info Card */}
+                <div className={`border-2 rounded-lg p-4 ${
+                  !selectedDateEntry.available && selectedDateEntry.locked_by_id && selectedDateEntry.locked_by_id !== 'DELETED'
+                    ? 'bg-blue-50 border-blue-300'
+                    : selectedDateEntry.is_conflicting || !selectedDateEntry.available
+                    ? 'bg-orange-50 border-orange-300'
+                    : 'bg-green-50 border-green-300'
+                }`}>
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex-1">
+                      <div className="font-semibold text-xl mb-2">{formatDate(selectedDateEntry.date)}</div>
+                      {selectedDateEntry.host && (
+                        <div className="text-sm mb-2">
+                          <strong>Host:</strong> {selectedDateEntry.host}
                         </div>
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${isLocked ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
-                          {isLocked ? '🔒 Locked' : '✓ Available'}
-                        </span>
-                      </div>
-                      {d.available && (
-                        <button 
-                          onClick={() => onDeleteDate(d.id)} 
-                          className="w-full px-3 py-2 bg-red-500 text-white rounded text-sm hover:bg-red-600 transition-colors"
-                        >
-                          Delete Date
-                        </button>
                       )}
-                      {!d.available && (
-                        <div className="text-xs text-neutral-500 italic text-center py-2">
-                          Cannot delete locked dates
+                      {selectedDateEntry.notes && (
+                        <div className="text-sm mb-2">
+                          <strong>Notes:</strong> {selectedDateEntry.notes}
                         </div>
                       )}
                     </div>
-                  );
-                })}
+                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                      !selectedDateEntry.available && selectedDateEntry.locked_by_id && selectedDateEntry.locked_by_id !== 'DELETED'
+                        ? 'bg-blue-100 text-blue-800'
+                        : selectedDateEntry.is_conflicting || !selectedDateEntry.available
+                        ? 'bg-orange-100 text-orange-800'
+                        : 'bg-green-100 text-green-800'
+                    }`}>
+                      {!selectedDateEntry.available && selectedDateEntry.locked_by_id && selectedDateEntry.locked_by_id !== 'DELETED'
+                        ? '🔒 Locked'
+                        : selectedDateEntry.is_conflicting || !selectedDateEntry.available
+                        ? '⚠️ Conflicting'
+                        : '✓ Available'}
+                    </span>
+                  </div>
+                  
+                  {/* Speaker Info if Locked */}
+                  {(() => {
+                    const speaker = getSpeakerForDate(selectedDateEntry);
+                    if (speaker) {
+                      return (
+                        <div className="border-t pt-3 mt-3">
+                          <div className="text-sm font-semibold mb-2">Speaker Information</div>
+                          <div className="text-sm space-y-1">
+                            <div><strong>Name:</strong> {speaker.full_name}</div>
+                            <div><strong>Talk:</strong> {speaker.talk_title || 'TBC'}</div>
+                            <div><strong>Email:</strong> {speaker.email}</div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+                
+                {/* Edit Button */}
+                {(!selectedDateEntry.locked_by_id || selectedDateEntry.locked_by_id === 'DELETED') && (
+                  <button
+                    onClick={() => {
+                      setDateType(selectedDateEntry.is_conflicting ? 'conflicting' : 'available');
+                      setDateNotes(selectedDateEntry.notes || '');
+                      setShowEditDateModal(true);
+                    }}
+                    className="w-full px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
+                  >
+                    Edit Date
+                  </button>
+                )}
+                
+                {selectedDateEntry.locked_by_id && selectedDateEntry.locked_by_id !== 'DELETED' && (
+                  <div className="text-xs text-neutral-500 italic text-center py-2">
+                    Cannot edit locked dates
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="border-2 border-dashed border-neutral-300 rounded-lg p-8 text-center">
+                <p className="text-neutral-500 mb-2">📅</p>
+                <p className="text-neutral-600 font-medium">Select a date from the calendar</p>
+                <p className="text-sm text-neutral-500 mt-1">
+                  Click on existing dates to view details or empty dates to add new
+                </p>
               </div>
             )}
           </div>
         </div>
+        
+        {/* Add Date Modal */}
+        {showAddDateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white rounded-lg shadow-xl p-6 w-96">
+              <h3 className="text-lg font-semibold mb-4">
+                Add Date: {selectedDate?.toLocaleDateString()}
+              </h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Type *</label>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="datetype"
+                        value="available"
+                        checked={dateType === 'available'}
+                        onChange={(e) => setDateType('available')}
+                      />
+                      <span className="text-green-600 font-medium">Available</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="datetype"
+                        value="conflicting"
+                        checked={dateType === 'conflicting'}
+                        onChange={(e) => setDateType('conflicting')}
+                      />
+                      <span className="text-orange-600 font-medium">Conflicting/Unavailable</span>
+                    </label>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-1">Notes (optional)</label>
+                  <textarea
+                    className="w-full border rounded px-3 py-2 min-h-[80px]"
+                    placeholder="Location, reason for conflict, etc."
+                    value={dateNotes}
+                    onChange={(e) => setDateNotes(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+                
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={handleSaveDate}
+                    className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
+                  >
+                    Add Date
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAddDateModal(false);
+                      setSelectedDate(null);
+                      setDateType('available');
+                      setDateNotes('');
+                    }}
+                    className="flex-1 px-4 py-2 border rounded hover:bg-neutral-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Edit Date Modal */}
+        {showEditDateModal && selectedDateEntry && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white rounded-lg shadow-xl p-6 w-96">
+              <h3 className="text-lg font-semibold mb-4">
+                Edit Date: {formatDate(selectedDateEntry.date)}
+              </h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Status *</label>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="editdatetype"
+                        value="available"
+                        checked={dateType === 'available'}
+                        onChange={(e) => setDateType('available')}
+                      />
+                      <span className="text-green-600 font-medium">Available</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="editdatetype"
+                        value="conflicting"
+                        checked={dateType === 'conflicting'}
+                        onChange={(e) => setDateType('conflicting')}
+                      />
+                      <span className="text-orange-600 font-medium">Conflicting/Unavailable</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="editdatetype"
+                        value="delete"
+                        checked={dateType === 'delete'}
+                        onChange={(e) => setDateType('delete')}
+                      />
+                      <span className="text-red-600 font-medium">Delete Date</span>
+                    </label>
+                  </div>
+                </div>
+                
+                {dateType !== 'delete' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Notes (optional)</label>
+                    <textarea
+                      className="w-full border rounded px-3 py-2 min-h-[80px]"
+                      placeholder="Location, reason for conflict, etc."
+                      value={dateNotes}
+                      onChange={(e) => setDateNotes(e.target.value)}
+                      rows={3}
+                    />
+                  </div>
+                )}
+                
+                {dateType === 'delete' && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+                    <strong>Warning:</strong> This will permanently delete this date.
+                  </div>
+                )}
+                
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={handleEditDate}
+                    className={`flex-1 px-4 py-2 text-white rounded ${
+                      dateType === 'delete' 
+                        ? 'bg-red-600 hover:bg-red-700' 
+                        : 'bg-primary hover:bg-primary/80'
+                    }`}
+                  >
+                    {dateType === 'delete' ? 'Delete' : 'Save Changes'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowEditDateModal(false);
+                      setDateType('available');
+                      setDateNotes('');
+                    }}
+                    className="flex-1 px-4 py-2 border rounded hover:bg-neutral-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -3023,30 +4093,95 @@ function SignupView({ invitation, onSignup }) {
 /* ---------------------
    InvitationsView
    --------------------- */
-function InvitationsView({ invitations, onCreateInvitation, formatDate }) {
-  return (
-    <div className="bg-white rounded shadow p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-medium">User Invitations</h2>
-        <button onClick={onCreateInvitation} className="px-3 py-1 bg-primary text-white rounded">Create Invitation</button>
+   function InvitationsView({ invitations, onCreateInvitation, onResendInvitation, onDeleteInvitation, formatDate }) {
+    return (
+      <div className="bg-white rounded shadow p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-medium">User Invitations</h2>
+          <button onClick={onCreateInvitation} className="px-3 py-1 bg-primary text-white rounded">Create Invitation</button>
+        </div>
+        {invitations.length === 0 ? <p className="text-sm text-neutral-500">No invitations.</p> : (
+          <div className="space-y-3">
+            {invitations.map(inv => {
+              const isExpired = inv.expires_at && (inv.expires_at.toDate ? inv.expires_at.toDate() : new Date(inv.expires_at)) < new Date();
+              const isUsed = inv.used;
+              
+              return (
+                <div 
+                  key={inv.id} 
+                  className={`border rounded-lg p-4 ${
+                    isUsed ? 'bg-green-50 border-green-200' : 
+                    isExpired ? 'bg-red-50 border-red-200' : 
+                    'bg-white border-neutral-200'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="font-semibold">{inv.full_name}</div>
+                        {isUsed && (
+                          <span className="px-2 py-0.5 bg-green-600 text-white text-xs font-semibold rounded">
+                            ✓ USED
+                          </span>
+                        )}
+                        {!isUsed && isExpired && (
+                          <span className="px-2 py-0.5 bg-red-600 text-white text-xs font-semibold rounded">
+                            ⚠️ EXPIRED
+                          </span>
+                        )}
+                        {!isUsed && !isExpired && (
+                          <span className="px-2 py-0.5 bg-blue-600 text-white text-xs font-semibold rounded">
+                            PENDING
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-neutral-600 mb-1">
+                        <strong>Email:</strong> {inv.email}
+                      </div>
+                      <div className="text-sm text-neutral-600 mb-1">
+                        <strong>Role:</strong> {inv.role} • <strong>Affiliation:</strong> {inv.affiliation}
+                      </div>
+                      <div className="text-xs text-neutral-500">
+                        Created: {formatDate(inv.createdAt)} • Expires: {formatDate(inv.expires_at)}
+                        {inv.resent_at && (
+                          <span className="ml-2">• Resent: {formatDate(inv.resent_at)}</span>
+                        )}
+                      </div>
+                      {isUsed && inv.used_at && (
+                        <div className="text-xs text-green-600 font-semibold mt-1">
+                          ✓ Used on {formatDate(inv.used_at)}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {!isUsed && (
+                      <div className="flex flex-col gap-2 ml-4">
+                        <button 
+                          onClick={() => onResendInvitation(inv.id)}
+                          className={`px-3 py-1 text-white text-xs rounded ${
+                            isExpired ? 'bg-orange-600 hover:bg-orange-700' : 'bg-blue-600 hover:bg-blue-700'
+                          }`}
+                          title={isExpired ? 'Resend with new expiry date' : 'Resend invitation'}
+                        >
+                          {isExpired ? '🔄 Resend (Expired)' : '🔄 Resend'}
+                        </button>
+                        <button 
+                          onClick={() => onDeleteInvitation(inv.id)}
+                          className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                        >
+                          🗑️ Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
-      {invitations.length === 0 ? <p className="text-sm text-neutral-500">No invitations.</p> : (
-        <ul className="space-y-2">
-          {invitations.map(inv => (
-            <li key={inv.id} className="flex items-center justify-between border rounded p-3">
-              <div>
-                <div className="font-semibold">{inv.full_name}</div>
-                <div className="text-sm text-neutral-600">{inv.email} • Expires {formatDate(inv.expires_at)}</div>
-              </div>
-              <div className="text-sm text-neutral-500">{inv.used ? 'Used' : 'Pending'}</div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
+    );
+  }
 /* ---------------------
    ProposeSpeakerView
    --------------------- */
@@ -3116,24 +4251,25 @@ function ProfileView({ userRole, onEditProfile }) {
    - AddDateForm, AddSpeakerForm, AddPastSpeakerForm, Edit forms
    ============================================================ */
 
-   function ActionsSidebar({ speaker, onClose, onUpdateAction, onAddAction, currentUser, formatDate }) {
+  function ActionsSidebar({ speaker, onClose, onUpdateAction, onAddAction, currentUser, formatDate, allUsers }) {
     const [collapsedCards, setCollapsedCards] = useState(new Set());
     
     const inviteLink = `${window.location.origin}?token=${speaker.access_token}`;
     const emailSubject = 'Invitation to Present at Collaboratorium Barcelona';
+
     const emailBody = `Dear ${speaker.full_name},
-  
-  We are delighted to invite you to present a seminar at the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona.
-  
-  Your host will be ${speaker.host}.
-  
-  Please visit the following link to accept and choose your preferred date:
-  ${inviteLink}
-  
-  This invitation will remain valid for 7 days. If you have any questions, please don't hesitate to reach out.
-  
-  Best regards,
-  ${currentUser.full_name}`;
+
+    We are delighted to invite you to present a seminar at the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona.
+
+    Your host will be ${speaker.host}.
+
+    Please visit the following link to accept and choose your preferred date:
+    ${inviteLink}
+
+    This invitation will remain valid for 14 days. If you have any questions, please don't hesitate to reach out.
+
+    Best regards,
+    ${currentUser.full_name}`;
   
     const actions = speaker.actions || [];
     
@@ -3196,9 +4332,7 @@ function ProfileView({ userRole, onEditProfile }) {
   We are delighted that you will be giving a seminar at the Barcelona Collaboratorium on ${seminarDate}.
   
   To start organizing your trip, could you please confirm your dates of stay in Barcelona? Once we have this information, we will send you an invitation to our TravelPerk platform, where you will book your flights and hotel. Please note that the TravelPerk invitation link expires in 24 hours, so it's best to complete the registration shortly after receiving it.
-  
-  Additionally, to announce your seminar internally and on our website, we would kindly ask you to send us a title and a brief abstract of your talk when convenient.
-  
+    
   We will schedule one-to-one meetings (30 minutes each) with you on Thursday after the seminar, for people who express interest.
   
   Don't hesitate to reach out if you have any questions regarding the logistics or your presentation.
@@ -3375,8 +4509,25 @@ function ProfileView({ userRole, onEditProfile }) {
                     <>
                       {action.type === 'invitation_drafted' && (
                         <div style={styles.actionCardContent}>
-                          <p style={styles.emailLabel}>To: {speaker.email}</p>
-                          <p style={styles.emailLabel}>Subject: {emailSubject}</p>
+                          <p style={styles.emailLabel}><strong>To:</strong> {speaker.email}</p>
+                          <p style={styles.emailLabel}>
+                            <strong>CC:</strong> {(() => {
+                              const organizers = allUsers.filter(u => u.role === 'Organizer');
+                              const organizersEmails = organizers.map(o => o.email);
+                              const host = allUsers.find(u => u.full_name === speaker.host);
+                              const hostEmail = host ? host.email : '';
+                              
+                              // Only add host email if not already in organizers list
+                              const ccEmailsSet = new Set(organizersEmails);
+                              if (hostEmail && !ccEmailsSet.has(hostEmail)) {
+                                ccEmailsSet.add(hostEmail);
+                              }
+                              
+                              const ccEmails = Array.from(ccEmailsSet).join(', ');
+                              return ccEmails || 'N/A';
+                            })()}
+                          </p>
+                          <p style={styles.emailLabel}><strong>Subject:</strong> {emailSubject}</p>
                           <div style={styles.emailBody}>
                             {emailBody.split('\n').map((line, i) => (
                               <p key={i} style={{margin: '8px 0'}}>{line}</p>
@@ -3385,7 +4536,20 @@ function ProfileView({ userRole, onEditProfile }) {
                           <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
                             <button
                               onClick={() => {
-                                const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+                                const organizers = allUsers.filter(u => u.role === 'Organizer');
+                                const organizersEmails = organizers.map(o => o.email);
+                                const host = allUsers.find(u => u.full_name === speaker.host);
+                                const hostEmail = host ? host.email : '';
+                                
+                                // Only add host email if not already in organizers list
+                                const ccEmailsSet = new Set(organizersEmails);
+                                if (hostEmail && !ccEmailsSet.has(hostEmail)) {
+                                  ccEmailsSet.add(hostEmail);
+                                }
+                                
+                                const ccEmails = Array.from(ccEmailsSet).join(',');
+                                
+                                const mailtoLink = `mailto:${speaker.email}?cc=${encodeURIComponent(ccEmails)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
                                 window.location.href = mailtoLink;
                               }}
                               style={styles.sendEmailBtn}
@@ -3426,7 +4590,6 @@ function ProfileView({ userRole, onEditProfile }) {
                           </div>
                         </div>
                       )}
-  
                       {getActionContent(action)}
                       
                       <p style={styles.actionTimestamp}>
@@ -3464,12 +4627,14 @@ function ProfileView({ userRole, onEditProfile }) {
     agenda, 
     onClose, 
     onAddMeeting, 
+    onEditMeeting,
     onDeleteMeeting, 
     showAddMeetingForm,
     onSubmitMeeting,
     onCancelMeeting,
     selectedTimeSlot,
     onSelectTimeSlot,
+    editingMeeting,
     formatDate,
     currentUser
   }) {
@@ -3482,31 +4647,45 @@ function ProfileView({ userRole, onEditProfile }) {
     
     const days = [startDate, seminarDate, endDate];
     
-    // Generate time slots from 8am to 8pm
+    // Generate time slots from 8am to 8pm in 15-minute intervals
     const timeSlots = [];
     for (let hour = 8; hour <= 20; hour++) {
-      timeSlots.push(`${hour.toString().padStart(2, '0')}:00`);
-      if (hour < 20) timeSlots.push(`${hour.toString().padStart(2, '0')}:30`);
+      [0, 15, 30, 45].forEach(minute => {
+        if (hour === 20 && minute > 0) return; // Stop at 8:00 PM
+        timeSlots.push({ hour, minute });
+      });
     }
     
-    // Get meetings for a specific time slot
-    const getMeetingsForSlot = (day, timeSlot) => {
+    // Format time in 12-hour format
+    const formatTime12h = (hour, minute) => {
+      const period = hour >= 12 ? 'PM' : 'AM';
+      const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+      return `${hour12}:${minute.toString().padStart(2, '0')} ${period}`;
+    };
+    
+    // Get meetings that overlap with a time slot
+    const getMeetingsForSlot = (day, slotHour, slotMinute) => {
       return (agenda.meetings || []).filter(meeting => {
         const meetingDate = meeting.date?.toDate ? meeting.date.toDate() : new Date(meeting.date);
         const meetingStart = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
+        const meetingEnd = meeting.end_time?.toDate ? meeting.end_time.toDate() : new Date(meeting.end_time);
         
-        const slotHour = parseInt(timeSlot.split(':')[0]);
-        const slotMinute = parseInt(timeSlot.split(':')[1]);
+        if (meetingDate.toDateString() !== day.toDateString()) return false;
         
-        // Check if meeting is on this day and overlaps with this time slot
-        if (meetingDate.toDateString() === day.toDateString()) {
-          const meetingHour = meetingStart.getHours();
-          const meetingMinute = meetingStart.getMinutes();
-          
-          return meetingHour === slotHour && meetingMinute === slotMinute;
-        }
-        return false;
+        const slotTime = slotHour * 60 + slotMinute;
+        const meetingStartTime = meetingStart.getHours() * 60 + meetingStart.getMinutes();
+        const meetingEndTime = meetingEnd.getHours() * 60 + meetingEnd.getMinutes();
+        
+        return slotTime >= meetingStartTime && slotTime < meetingEndTime;
       });
+    };
+    
+    // Calculate how many slots a meeting spans
+    const getMeetingSpan = (meeting) => {
+      const start = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
+      const end = meeting.end_time?.toDate ? meeting.end_time.toDate() : new Date(meeting.end_time);
+      const durationMinutes = (end - start) / (1000 * 60);
+      return Math.ceil(durationMinutes / 15); // Number of 15-minute slots
     };
     
     const getMeetingColor = (type) => {
@@ -3521,14 +4700,22 @@ function ProfileView({ userRole, onEditProfile }) {
     const formatTimeSlot = (meeting) => {
       const start = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
       const end = meeting.end_time?.toDate ? meeting.end_time.toDate() : new Date(meeting.end_time);
-      return `${start.getHours()}:${start.getMinutes().toString().padStart(2, '0')} - ${end.getHours()}:${end.getMinutes().toString().padStart(2, '0')}`;
+      return `${formatTime12h(start.getHours(), start.getMinutes())} - ${formatTime12h(end.getHours(), end.getMinutes())}`;
     };
     
-    const handleTimeSlotClick = (day, time) => {
+    const handleTimeSlotClick = (day, hour, minute) => {
       if (showAddMeetingForm) return;
-      onSelectTimeSlot({ day, time });
+      onSelectTimeSlot({ day, hour, minute });
       onAddMeeting();
     };
+    
+    const handleMeetingClick = (meeting, index) => {
+      if (meeting.is_locked) return;
+      onEditMeeting(meeting, index);
+    };
+    
+    // Track which meetings we've already rendered to avoid duplicates
+    const renderedMeetings = new Set();
     
     // Generate iCal file for download
     const generateICalFile = () => {
@@ -3581,7 +4768,7 @@ function ProfileView({ userRole, onEditProfile }) {
     return (
       <div style={styles.agendaSidebar}>
         <div style={{
-          padding: '20px',
+          padding: '15px 20px',
           borderBottom: '2px solid #e0e0e0',
           display: 'flex',
           justifyContent: 'space-between',
@@ -3591,11 +4778,11 @@ function ProfileView({ userRole, onEditProfile }) {
           <div>
             <h3 style={{
               margin: 0,
-              fontSize: '20px',
+              fontSize: '18px',
               color: '#2c3e50',
               fontWeight: '600'
             }}>Agenda - {agenda.speaker_name}</h3>
-            <p style={{fontSize: '13px', color: '#666', margin: '4px 0 0 0'}}>
+            <p style={{fontSize: '12px', color: '#666', margin: '4px 0 0 0'}}>
               {formatDate(seminarDate)}
             </p>
           </div>
@@ -3604,19 +4791,19 @@ function ProfileView({ userRole, onEditProfile }) {
               <button 
                 onClick={() => setShareMenuOpen(!shareMenuOpen)}
                 style={{
-                  padding: '8px 12px',
+                  padding: '6px 10px',
                   backgroundColor: '#27ae60',
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '13px',
+                  fontSize: '12px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px'
+                  gap: '4px'
                 }}
               >
-                <Send size={16} />
+                <Send size={14} />
                 Share
               </button>
               
@@ -3631,7 +4818,7 @@ function ProfileView({ userRole, onEditProfile }) {
                   borderRadius: '4px',
                   boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
                   zIndex: 100,
-                  minWidth: '200px'
+                  minWidth: '180px'
                 }}>
                   <button
                     onClick={() => {
@@ -3640,12 +4827,12 @@ function ProfileView({ userRole, onEditProfile }) {
                     }}
                     style={{
                       width: '100%',
-                      padding: '10px 15px',
+                      padding: '8px 12px',
                       textAlign: 'left',
                       border: 'none',
                       background: 'none',
                       cursor: 'pointer',
-                      fontSize: '13px',
+                      fontSize: '12px',
                       borderBottom: '1px solid #eee'
                     }}
                   >
@@ -3663,12 +4850,12 @@ function ProfileView({ userRole, onEditProfile }) {
                     }}
                     style={{
                       width: '100%',
-                      padding: '10px 15px',
+                      padding: '8px 12px',
                       textAlign: 'left',
                       border: 'none',
                       background: 'none',
                       cursor: 'pointer',
-                      fontSize: '13px'
+                      fontSize: '12px'
                     }}
                   >
                     📧 Email to speaker
@@ -3689,7 +4876,7 @@ function ProfileView({ userRole, onEditProfile }) {
                 justifyContent: 'center'
               }}
             >
-              <X size={24} />
+              <X size={20} />
             </button>
           </div>
         </div>
@@ -3712,94 +4899,129 @@ function ProfileView({ userRole, onEditProfile }) {
   
           {/* Time slots grid */}
           <div style={styles.agendaCalendarGrid}>
-            {timeSlots.map((timeSlot, timeIdx) => (
-              <React.Fragment key={timeIdx}>
-                {/* Time label */}
-                <div style={styles.timeSlotLabel}>{timeSlot}</div>
-                
-                {/* Day cells */}
-                {days.map((day, dayIdx) => {
-                  const meetings = getMeetingsForSlot(day, timeSlot);
-                  const isClickable = currentUser.role === 'Organizer' || agenda.host === currentUser.full_name;
+            {timeSlots.map((slot, timeIdx) => {
+              const isHourMark = slot.minute === 0;
+              
+              return (
+                <React.Fragment key={timeIdx}>
+                  {/* Time label - only show on hour marks */}
+                  <div style={{
+                    ...styles.timeSlotLabel,
+                    fontSize: isHourMark ? '11px' : '9px',
+                    color: isHourMark ? '#666' : '#999',
+                    fontWeight: isHourMark ? '600' : '400'
+                  }}>
+                    {isHourMark ? formatTime12h(slot.hour, slot.minute) : ''}
+                  </div>
                   
-                  return (
-                    <div
-                      key={dayIdx}
-                      style={{
-                        ...styles.timeSlotCell,
-                        backgroundColor: isClickable ? 'transparent' : '#f9f9f9',
-                        cursor: isClickable ? 'pointer' : 'default'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (isClickable && meetings.length === 0) {
-                          e.currentTarget.style.backgroundColor = '#e3f2fd';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (isClickable) {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }
-                      }}
-                      onClick={() => isClickable && meetings.length === 0 && handleTimeSlotClick(day, timeSlot)}
-                    >
-                      {meetings.map((meeting, meetingIdx) => (
-                        <div
-                          key={meetingIdx}
-                          style={{
-                            ...styles.calendarMeeting,
-                            backgroundColor: getMeetingColor(meeting.type)
-                          }}
-                        >
-                          <div style={styles.calendarMeetingTitle}>
-                            {meeting.title}
-                          </div>
-                          <div style={styles.calendarMeetingTime}>
-                            {formatTimeSlot(meeting)}
-                          </div>
-                          {meeting.location && (
-                            <div style={{fontSize: '10px', marginTop: '2px'}}>
-                              📍 {meeting.location}
-                            </div>
-                          )}
-                          {!meeting.is_locked && isClickable && (
-                            <button
+                  {/* Day cells */}
+                  {days.map((day, dayIdx) => {
+                    const meetings = getMeetingsForSlot(day, slot.hour, slot.minute);
+                    const isClickable = currentUser.role === 'Organizer' || agenda.host === currentUser.full_name;
+                    
+                    // Check if this is the first slot of any meeting
+                    const meetingsStartingHere = meetings.filter(meeting => {
+                      const meetingStart = meeting.start_time?.toDate ? meeting.start_time.toDate() : new Date(meeting.start_time);
+                      return meetingStart.getHours() === slot.hour && meetingStart.getMinutes() === slot.minute;
+                    });
+                    
+                    return (
+                      <div
+                        key={dayIdx}
+                        style={{
+                          ...styles.timeSlotCell,
+                          minHeight: '30px',
+                          backgroundColor: isClickable && meetings.length === 0 ? 'transparent' : meetings.length > 0 ? 'transparent' : '#f9f9f9',
+                          cursor: isClickable && meetings.length === 0 ? 'pointer' : 'default',
+                          position: 'relative'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (isClickable && meetings.length === 0) {
+                            e.currentTarget.style.backgroundColor = '#e3f2fd';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (isClickable) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
+                        onClick={() => isClickable && meetings.length === 0 && handleTimeSlotClick(day, slot.hour, slot.minute)}
+                      >
+                        {meetingsStartingHere.map((meeting, meetingIdx) => {
+                          const meetingKey = `${day.toDateString()}-${meeting.title}-${meeting.start_time}`;
+                          if (renderedMeetings.has(meetingKey)) return null;
+                          renderedMeetings.add(meetingKey);
+                          
+                          const span = getMeetingSpan(meeting);
+                          const globalIndex = (agenda.meetings || []).indexOf(meeting);
+                          
+                          return (
+                            <div
+                              key={meetingIdx}
+                              style={{
+                                ...styles.calendarMeeting,
+                                backgroundColor: getMeetingColor(meeting.type),
+                                height: `${span * 30 - 4}px`,
+                                cursor: meeting.is_locked ? 'default' : 'pointer'
+                              }}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                const meetingIndex = agenda.meetings.findIndex(m => m === meeting);
-                                onDeleteMeeting(meetingIndex);
+                                if (!meeting.is_locked && isClickable) {
+                                  handleMeetingClick(meeting, globalIndex);
+                                }
                               }}
-                              style={styles.deleteMeetingBtn}
                             >
-                              ×
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-              </React.Fragment>
-            ))}
+                              <div style={styles.calendarMeetingTitle}>
+                                {meeting.title}
+                              </div>
+                              <div style={styles.calendarMeetingTime}>
+                                {formatTimeSlot(meeting)}
+                              </div>
+                              {meeting.location && (
+                                <div style={{fontSize: '9px', marginTop: '2px'}}>
+                                  📍 {meeting.location}
+                                </div>
+                              )}
+                              {!meeting.is_locked && isClickable && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteMeeting(globalIndex);
+                                  }}
+                                  style={styles.deleteMeetingBtn}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
           </div>
         </div>
   
         {/* Agenda info footer */}
         <div style={styles.agendaInfo}>
-          <div style={{fontSize: '13px', color: '#666'}}>
+          <div style={{fontSize: '12px', color: '#666'}}>
             <strong>Host:</strong> {agenda.host} | <strong>Speaker:</strong> {agenda.speaker_email}
           </div>
           {(currentUser.role === 'Organizer' || agenda.host === currentUser.full_name) && (
             <button
               onClick={onAddMeeting}
               style={{
-                marginTop: '10px',
-                padding: '8px 12px',
+                marginTop: '8px',
+                padding: '6px 10px',
                 backgroundColor: '#3498db',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                fontSize: '13px',
+                fontSize: '12px',
                 width: '100%'
               }}
             >
@@ -3808,7 +5030,7 @@ function ProfileView({ userRole, onEditProfile }) {
           )}
         </div>
   
-        {/* Add meeting form overlay */}
+        {/* Add/Edit meeting form overlay */}
         {showAddMeetingForm && (
           <div style={{
             position: 'absolute',
@@ -3824,10 +5046,10 @@ function ProfileView({ userRole, onEditProfile }) {
           }}>
             <div style={{
               backgroundColor: 'white',
-              padding: '30px',
+              padding: '25px',
               borderRadius: '8px',
               width: '90%',
-              maxWidth: '500px',
+              maxWidth: '450px',
               maxHeight: '80vh',
               overflowY: 'auto'
             }}>
@@ -3836,6 +5058,7 @@ function ProfileView({ userRole, onEditProfile }) {
                 onCancel={onCancelMeeting}
                 selectedTimeSlot={selectedTimeSlot}
                 seminarDate={seminarDate}
+                editingMeeting={editingMeeting}
               />
             </div>
           </div>
@@ -3844,15 +5067,33 @@ function ProfileView({ userRole, onEditProfile }) {
     );
   }
   
-  /* ---------------------
-     AddMeetingFormInline - used within AgendaSidebar
-     --------------------- */
-  function AddMeetingFormInline({ onSubmit, onCancel, selectedTimeSlot, seminarDate }) {
-    const initialDate = selectedTimeSlot?.day 
-      ? selectedTimeSlot.day.toISOString().split('T')[0]
-      : seminarDate.toISOString().split('T')[0];
-      
-    const initialStartTime = selectedTimeSlot?.time || '10:00';
+/* ---------------------
+    AddMeetingFormInline - used within AgendaSidebar
+    --------------------- */
+    function AddMeetingFormInline({ onSubmit, onCancel, selectedTimeSlot, seminarDate, editingMeeting }) {
+    // If editing, use meeting data; otherwise use selectedTimeSlot or defaults
+    const initialDate = editingMeeting 
+      ? (editingMeeting.date?.toDate ? editingMeeting.date.toDate() : new Date(editingMeeting.date)).toISOString().split('T')[0]
+      : selectedTimeSlot?.day 
+        ? selectedTimeSlot.day.toISOString().split('T')[0]
+        : seminarDate.toISOString().split('T')[0];
+    
+    const getInitialTime = (timeObj) => {
+      if (editingMeeting && timeObj) {
+        const date = timeObj.toDate ? timeObj.toDate() : new Date(timeObj);
+        const hours = date.getHours();
+        const minutes = date.getMinutes();
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+      }
+      if (selectedTimeSlot) {
+        return `${selectedTimeSlot.hour.toString().padStart(2, '0')}:${selectedTimeSlot.minute.toString().padStart(2, '0')}`;
+      }
+      return '10:00';
+    };
+    
+    const initialStartTime = editingMeeting 
+      ? getInitialTime(editingMeeting.start_time)
+      : getInitialTime();
     
     // Calculate end time (30 minutes after start)
     const calculateEndTime = (startTime) => {
@@ -3863,15 +5104,19 @@ function ProfileView({ userRole, onEditProfile }) {
       return `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
     };
     
+    const initialEndTime = editingMeeting
+      ? getInitialTime(editingMeeting.end_time)
+      : calculateEndTime(initialStartTime);
+    
     const [form, setForm] = useState({ 
-      title: '', 
-      type: 'meeting', 
+      title: editingMeeting?.title || '', 
+      type: editingMeeting?.type || 'meeting', 
       date: initialDate, 
       start_time: initialStartTime, 
-      end_time: calculateEndTime(initialStartTime), 
-      location: '', 
-      attendees: '', 
-      notes: '' 
+      end_time: initialEndTime, 
+      location: editingMeeting?.location || '', 
+      attendees: editingMeeting?.attendees?.join(', ') || '', 
+      notes: editingMeeting?.notes || '' 
     });
     
     const submit = (e) => { 
@@ -3879,9 +5124,24 @@ function ProfileView({ userRole, onEditProfile }) {
       onSubmit(form); 
     };
     
+    // Generate time options in 15-minute intervals
+    const timeOptions = [];
+    for (let hour = 8; hour <= 20; hour++) {
+      [0, 15, 30, 45].forEach(minute => {
+        if (hour === 20 && minute > 0) return; // Stop at 8:00 PM
+        const time24 = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+        const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+        const period = hour >= 12 ? 'PM' : 'AM';
+        const time12 = `${hour12}:${minute.toString().padStart(2, '0')} ${period}`;
+        timeOptions.push({ value: time24, label: time12 });
+      });
+    }
+    
     return (
       <form onSubmit={submit} className="space-y-3">
-        <h3 style={{fontSize: '20px', fontWeight: '600', marginBottom: '15px'}}>Add Meeting</h3>
+        <h3 style={{fontSize: '18px', fontWeight: '600', marginBottom: '12px'}}>
+          {editingMeeting ? 'Edit Meeting' : 'Add Meeting'}
+        </h3>
         
         <div>
           <label className="block text-sm font-medium mb-1">Title *</label>
@@ -3920,10 +5180,9 @@ function ProfileView({ userRole, onEditProfile }) {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Start *</label>
-            <input 
-              type="time" 
-              className="w-full border rounded px-3 py-2" 
-              value={form.start_time} 
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={form.start_time}
               onChange={e => {
                 const newStartTime = e.target.value;
                 setForm({ 
@@ -3931,19 +5190,26 @@ function ProfileView({ userRole, onEditProfile }) {
                   start_time: newStartTime,
                   end_time: calculateEndTime(newStartTime)
                 });
-              }} 
-              required 
-            />
+              }}
+              required
+            >
+              {timeOptions.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">End *</label>
-            <input 
-              type="time" 
-              className="w-full border rounded px-3 py-2" 
-              value={form.end_time} 
-              onChange={e => setForm({ ...form, end_time: e.target.value })} 
-              required 
-            />
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={form.end_time}
+              onChange={e => setForm({ ...form, end_time: e.target.value })}
+              required
+            >
+              {timeOptions.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
         </div>
         
@@ -3980,7 +5246,9 @@ function ProfileView({ userRole, onEditProfile }) {
         
         <div className="flex justify-end gap-2 mt-4">
           <button type="button" onClick={onCancel} className="px-4 py-2 border rounded">Cancel</button>
-          <button type="submit" className="px-4 py-2 bg-primary text-white rounded">Save Meeting</button>
+          <button type="submit" className="px-4 py-2 bg-primary text-white rounded">
+            {editingMeeting ? 'Update Meeting' : 'Save Meeting'}
+          </button>
         </div>
       </form>
     );
@@ -4018,7 +5286,7 @@ function PosterSidebar({ speaker, onClose, formatDate, allUsers }) {
    AddDateForm
    --------------------- */
 function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
-  const [form, setForm] = useState({ date: '', host: '', notes: '' });
+  const [form, setForm] = useState({ date: '', type: 'available', host: '', notes: '' });
   const handle = (e) => { e.preventDefault(); onSubmit(form); };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -4030,12 +5298,37 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
             <input type="date" className="w-full border rounded px-3 py-2" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
           </div>
           <div>
-            <label className="text-sm block mb-1">Host</label>
-            <input className="w-full border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} />
+            <label className="text-sm block mb-2">Type *</label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="type"
+                  value="available"
+                  checked={form.type === 'available'}
+                  onChange={(e) => setForm({ ...form, type: 'available' })}
+                />
+                <span className="text-green-600 font-medium">Available</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="type"
+                  value="conflicting"
+                  checked={form.type === 'conflicting'}
+                  onChange={(e) => setForm({ ...form, type: 'conflicting' })}
+                />
+                <span className="text-orange-600 font-medium">Conflicting/Unavailable</span>
+              </label>
+            </div>
           </div>
           <div>
-            <label className="text-sm block mb-1">Notes</label>
-            <input className="w-full border rounded px-3 py-2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+            <label className="text-sm block mb-1">Host (optional)</label>
+            <input className="w-full border rounded px-3 py-2" placeholder="Enter host name" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Notes (optional)</label>
+            <textarea className="w-full border rounded px-3 py-2 min-h-[80px]" placeholder="Location, reason for conflict, etc." value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} />
           </div>
           <div className="flex justify-end gap-2">
             <button onClick={onCancel} type="button" className="px-3 py-2 border rounded">Cancel</button>
@@ -4050,12 +5343,69 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
 /* ---------------------
    AddSpeakerForm
    --------------------- */
-function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countries }) {
-  const [form, setForm] = useState({ full_name: '', email: '', affiliation: '', country: '', area_of_expertise: '', ranking: 'Medium Priority', notes: '', host: currentUser?.full_name || '' });
+
+function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countries, availableDates, userAvailability, formatDate }) {
+  const [form, setForm] = useState({ 
+    full_name: '', 
+    email: '', 
+    affiliation: '', 
+    country: '', 
+    area_of_expertise: '', 
+    ranking: 'Medium Priority', 
+    notes: '', 
+    host: currentUser?.full_name || '',
+    preferred_date: ''
+  });
+  
+  const [showDateInfo, setShowDateInfo] = useState(false);
+  
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
+  
+  // Get available dates for selected host
+  const getAvailableDatesForHost = (hostName) => {
+    if (!hostName) return [];
+    
+    const hostFellow = seniorFellows.find(f => f.full_name === hostName);
+    if (!hostFellow) return availableDates.filter(d => d.available && d.locked_by_id !== 'DELETED');
+    
+    return availableDates.filter(d => {
+      if (!d.available || d.locked_by_id === 'DELETED') return false;
+      
+      // Check if host is unavailable for this date
+      const hostUnavailable = userAvailability.find(ua => 
+        ua.user_id === hostFellow.id && 
+        ua.date_id === d.id && 
+        ua.available === false
+      );
+      
+      return !hostUnavailable;
+    }).sort((a, b) => {
+      const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+      const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+      return dateA - dateB;
+    });
+  };
+  
+  // Get available fellows for a selected date
+  const getAvailableFellowsForDate = (dateId) => {
+    if (!dateId) return [];
+    
+    return seniorFellows.filter(fellow => {
+      const unavailability = userAvailability.find(ua => 
+        ua.user_id === fellow.id && 
+        ua.date_id === dateId && 
+        ua.available === false
+      );
+      return !unavailability;
+    });
+  };
+  
+  const availableDatesForHost = getAvailableDatesForHost(form.host);
+  const availableFellowsForDate = form.preferred_date ? getAvailableFellowsForDate(form.preferred_date) : [];
+  
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <h3 className="text-xl font-semibold mb-4">Propose Speaker</h3>
         <form onSubmit={submit} className="grid grid-cols-2 gap-4">
           <div>
@@ -4090,16 +5440,61 @@ function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countr
             </select>
           </div>
           <div className="col-span-2">
-            <label className="text-sm block mb-1">Notes *</label>
-            <input className="w-full border rounded px-3 py-2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value})} placeholder="Optional notes about why this speaker should be invited" />
+            <label className="text-sm block mb-1">Notes</label>
+            <textarea className="w-full border rounded px-3 py-2 min-h-[60px]" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value})} placeholder="Optional notes about why this speaker should be invited" />
           </div>
           <div>
             <label className="text-sm block mb-1">Host *</label>
-            <select required className="w-full border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })}>
+            <select 
+              required 
+              className="w-full border rounded px-3 py-2" 
+              value={form.host} 
+              onChange={e => {
+                setForm({ ...form, host: e.target.value, preferred_date: '' });
+                setShowDateInfo(false);
+              }}
+            >
               <option value="">-- Select Host --</option>
               {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
             </select>
           </div>
+          <div>
+            <label className="text-sm block mb-1">Preferred Date (optional)</label>
+            <select 
+              className="w-full border rounded px-3 py-2" 
+              value={form.preferred_date} 
+              onChange={e => {
+                setForm({ ...form, preferred_date: e.target.value });
+                setShowDateInfo(!!e.target.value);
+              }}
+              disabled={!form.host}
+            >
+              <option value="">-- Select Date --</option>
+              {availableDatesForHost.map(d => (
+                <option key={d.id} value={d.id}>
+                  {formatDate(d.date)} {d.notes ? `(${d.notes})` : ''}
+                </option>
+              ))}
+            </select>
+            {form.host && availableDatesForHost.length === 0 && (
+              <p className="text-xs text-amber-600 mt-1">⚠️ No available dates for this host</p>
+            )}
+          </div>
+          
+          {/* Show available fellows for selected date */}
+          {showDateInfo && availableFellowsForDate.length > 0 && (
+            <div className="col-span-2 p-3 bg-green-50 border border-green-200 rounded">
+              <div className="font-semibold text-green-800 mb-2 text-sm">
+                ✓ {availableFellowsForDate.length} Fellow{availableFellowsForDate.length !== 1 ? 's' : ''} Available on This Date
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs text-green-700">
+                {availableFellowsForDate.map(f => (
+                  <div key={f.id}>• {f.full_name}</div>
+                ))}
+              </div>
+            </div>
+          )}
+          
           <div className="col-span-2 flex justify-end gap-2">
             <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
             <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Propose Speaker</button>
@@ -4195,67 +5590,157 @@ function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries
 /* ---------------------
    EditConfirmedSpeakerForm
    --------------------- */
-function EditConfirmedSpeakerForm({ speaker, availableDates, onSubmit, onDelete, onCancel, formatDate }) {
-  const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
-  const [form, setForm] = useState({
-    talk_title: speaker.talk_title || '',
-    talk_abstract: speaker.talk_abstract || '',
-    host: speaker.host || '',
-    assigned_date: speaker.assigned_date ? (speaker.assigned_date.toDate ? speaker.assigned_date.toDate().toISOString().split('T')[0] : new Date(speaker.assigned_date).toISOString().split('T')[0]) : '',
-    current_date_id: currentLockedDate?.id || null,
-    new_date_id: currentLockedDate?.id || null,
-    old_date_id: currentLockedDate?.id || null
-  });
-
-  const submit = (e) => { e.preventDefault(); onSubmit(form); };
-
-  const selectableDates = availableDates.filter(d => (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED');
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
-        <h3 className="text-xl font-semibold mb-4">Edit Confirmed Speaker</h3>
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <label className="text-sm block mb-1">Talk Title</label>
-            <input className="w-full border rounded px-3 py-2" value={form.talk_title} onChange={e => setForm({ ...form, talk_title: e.target.value })} required />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Talk Abstract</label>
-            <textarea className="w-full border rounded px-3 py-2 min-h-[120px]" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Host</label>
-            <input className="w-full border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} required />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Assigned Date</label>
-            <select className="w-full border rounded px-3 py-2" value={form.new_date_id || ''} onChange={(e) => {
-              const selectedDateId = e.target.value;
-              const selectedDate = availableDates.find(d => d.id === selectedDateId);
-              setForm({
-                ...form,
-                new_date_id: selectedDateId,
-                assigned_date: selectedDate?.date ? (selectedDate.date.toDate ? selectedDate.date.toDate().toISOString().split('T')[0] : new Date(selectedDate.date).toISOString().split('T')[0]) : ''
-              });
-            }} required>
-              <option value="">-- Select Date --</option>
-              {selectableDates.map(d => <option key={d.id} value={d.id}>{formatDate(d.date)} - {d.host} {d.notes ? `(${d.notes})` : ''}{d.id === currentLockedDate?.id ? ' (Current)' : ''}</option>)}
-            </select>
-          </div>
-
-          <div className="flex justify-between gap-2">
-            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
-            <div className="flex gap-2">
-              <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
-              <button type="button" onClick={() => onDelete(speaker.id)} className="px-3 py-2 bg-red-600 text-white rounded">Delete Speaker</button>
+  function EditConfirmedSpeakerForm({ speaker, availableDates, onSubmit, onDelete, onCancel, formatDate, seniorFellows, userAvailability }) {
+    const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
+    const [form, setForm] = useState({
+      talk_title: speaker.talk_title || '',
+      talk_abstract: speaker.talk_abstract || '',
+      host: speaker.host || '',
+      host_type: speaker.host ? 'fellow' : 'other',
+      custom_host: '',
+      assigned_date: speaker.assigned_date ? (speaker.assigned_date.toDate ? speaker.assigned_date.toDate().toISOString().split('T')[0] : new Date(speaker.assigned_date).toISOString().split('T')[0]) : '',
+      current_date_id: currentLockedDate?.id || null,
+      new_date_id: currentLockedDate?.id || null,
+      old_date_id: currentLockedDate?.id || null
+    });
+  
+    const submit = (e) => { 
+      e.preventDefault(); 
+      const finalForm = {
+        ...form,
+        host: form.host_type === 'other' ? form.custom_host : form.host
+      };
+      onSubmit(finalForm); 
+    };
+  
+    // Filter dates: available OR current locked date
+    const selectableDates = availableDates.filter(d => 
+      (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED'
+    );
+    
+    // Get available hosts for the selected date (fellows who are NOT unavailable)
+    const getAvailableHosts = (dateId) => {
+      if (!dateId) return [];
+      
+      return seniorFellows.filter(fellow => {
+        // Check if this fellow is marked as unavailable for this date
+        const unavailability = userAvailability.find(ua => 
+          ua.user_id === fellow.id && 
+          ua.date_id === dateId && 
+          ua.available === false
+        );
+        
+        return !unavailability; // Only include if NOT unavailable
+      });
+    };
+    
+    const availableHosts = getAvailableHosts(form.new_date_id);
+  
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <h3 className="text-xl font-semibold mb-4">Edit Confirmed Speaker</h3>
+          <form onSubmit={submit} className="space-y-4">
+            <div>
+              <label className="text-sm block mb-1">Talk Title</label>
+              <input className="w-full border rounded px-3 py-2" value={form.talk_title} onChange={e => setForm({ ...form, talk_title: e.target.value })} required />
             </div>
-          </div>
-        </form>
+            <div>
+              <label className="text-sm block mb-1">Talk Abstract</label>
+              <textarea className="w-full border rounded px-3 py-2 min-h-[120px]" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
+            </div>
+            
+            {/* Assigned Date - moved before host for dependency */}
+            <div>
+              <label className="text-sm block mb-1">Assigned Date</label>
+              <select className="w-full border rounded px-3 py-2" value={form.new_date_id || ''} onChange={(e) => {
+                const selectedDateId = e.target.value;
+                const selectedDate = availableDates.find(d => d.id === selectedDateId);
+                setForm({
+                  ...form,
+                  new_date_id: selectedDateId,
+                  assigned_date: selectedDate?.date ? (selectedDate.date.toDate ? selectedDate.date.toDate().toISOString().split('T')[0] : new Date(selectedDate.date).toISOString().split('T')[0]) : '',
+                  host: '', // Reset host when date changes
+                  host_type: 'fellow'
+                });
+              }} required>
+                <option value="">-- Select Date --</option>
+                {selectableDates.map(d => <option key={d.id} value={d.id}>{formatDate(d.date)} - {d.host || 'TBD'} {d.notes ? `(${d.notes})` : ''}{d.id === currentLockedDate?.id ? ' (Current)' : ''}</option>)}
+              </select>
+            </div>
+            
+            {/* Host Selection */}
+            <div>
+              <label className="text-sm block mb-1">Host</label>
+              <select 
+                className="w-full border rounded px-3 py-2 mb-2" 
+                value={form.host_type} 
+                onChange={e => setForm({ ...form, host_type: e.target.value, host: '', custom_host: '' })}
+              >
+                <option value="fellow">Select from available fellows</option>
+                <option value="other">Other (specify)</option>
+              </select>
+              
+              {form.host_type === 'fellow' ? (
+                <>
+                  <select 
+                    className="w-full border rounded px-3 py-2" 
+                    value={form.host} 
+                    onChange={e => setForm({ ...form, host: e.target.value })} 
+                    required
+                  >
+                    <option value="">-- Select Host --</option>
+                    {availableHosts.map(f => (
+                      <option key={f.id} value={f.full_name}>
+                        {f.full_name} ({f.role})
+                      </option>
+                    ))}
+                  </select>
+                  
+                  {/* Show available fellows info */}
+                  {form.new_date_id && availableHosts.length > 0 && (
+                    <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded text-sm">
+                      <div className="font-semibold text-green-800 mb-2">✓ {availableHosts.length} Fellow{availableHosts.length !== 1 ? 's' : ''} Available</div>
+                      <div className="space-y-1 text-xs text-green-700">
+                        {availableHosts.slice(0, 5).map(f => (
+                          <div key={f.id}>• {f.full_name}</div>
+                        ))}
+                        {availableHosts.length > 5 && (
+                          <div className="italic">+ {availableHosts.length - 5} more...</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {form.new_date_id && availableHosts.length === 0 && (
+                    <p className="text-xs text-amber-600 mt-2 p-2 bg-amber-50 border border-amber-200 rounded">
+                      ⚠️ No fellows are available on this date. Consider using "Other" option or choosing a different date.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <input 
+                  className="w-full border rounded px-3 py-2" 
+                  placeholder="Enter host name" 
+                  value={form.custom_host} 
+                  onChange={e => setForm({ ...form, custom_host: e.target.value })} 
+                  required
+                />
+              )}
+            </div>
+  
+            <div className="flex justify-between gap-2 pt-4 border-t">
+              <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
+              <div className="flex gap-2">
+                <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
+                <button type="button" onClick={() => onDelete(speaker.id)} className="px-3 py-2 bg-red-600 text-white rounded">Delete Speaker</button>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
 /* ---------------------
    InviteUserForm
