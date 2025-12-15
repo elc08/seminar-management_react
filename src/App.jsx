@@ -5462,254 +5462,278 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
    AddSpeakerForm
    --------------------- */
 
-function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countries, availableDates, userAvailability, formatDate }) {
-  const [form, setForm] = useState({ 
-    full_name: '', 
-    email: '', 
-    affiliation: '', 
-    country: '', 
-    area_of_expertise: '', 
-    speaker_url: '',
-    ranking: 'Medium Priority', 
-    notes: '', 
-    host: currentUser?.full_name || '',
-    preferred_date: '',
-    mugshot_image: null,
-    science_image: null
-  });
-
-  const [mugshotPreview, setMugshotPreview] = useState(null);
-  const [sciencePreview, setSciencePreview] = useState(null);
-  
-  const [showDateInfo, setShowDateInfo] = useState(false);
-  
-  const submit = (e) => { e.preventDefault(); onSubmit(form); };
-
-  const handleMugshotChange = async (file) => {
-    if (!file) {
-      setForm(prev => ({ ...prev, mugshot_image: null }));
-      setMugshotPreview(null);
-      return;
-    }
-    try {
-      // Mugshot: square, downscaled
-      const dataUrl = await processImageFile(file, { targetWidth: 420, targetHeight: 420, quality: 0.7 });
-      setForm(prev => ({ ...prev, mugshot_image: dataUrl }));
-      setMugshotPreview(dataUrl);
-    } catch (e) {
-      alert('Could not process mugshot image. Please try another file.');
-    }
-  };
-
-  const handleScienceChange = async (file) => {
-    if (!file) {
-      setForm(prev => ({ ...prev, science_image: null }));
-      setSciencePreview(null);
-      return;
-    }
-    try {
-      // Science explanation image: 16:9, downscaled
-      const dataUrl = await processImageFile(file, { targetWidth: 960, targetHeight: 540, quality: 0.7 });
-      setForm(prev => ({ ...prev, science_image: dataUrl }));
-      setSciencePreview(dataUrl);
-    } catch (e) {
-      alert('Could not process science image. Please try another file.');
-    }
-  };
-  
-  // Get available dates for selected host
-  const getAvailableDatesForHost = (hostName) => {
-    if (!hostName) return [];
-    
-    const hostFellow = seniorFellows.find(f => f.full_name === hostName);
-    if (!hostFellow) return availableDates.filter(d => d.available && d.locked_by_id !== 'DELETED');
-    
-    return availableDates.filter(d => {
-      if (!d.available || d.locked_by_id === 'DELETED') return false;
-      
-      // Check if host is unavailable for this date
-      const hostUnavailable = userAvailability.find(ua => 
-        ua.user_id === hostFellow.id && 
-        ua.date_id === d.id && 
-        ua.available === false
-      );
-      
-      return !hostUnavailable;
-    }).sort((a, b) => {
-      const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-      const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-      return dateA - dateB;
+   function AddSpeakerForm({
+    onSubmit,
+    onCancel,
+    seniorFellows,
+    currentUser,
+    countries,
+    availableDates,
+    userAvailability,
+    formatDate
+  }) {
+    const [form, setForm] = useState({
+      full_name: "",
+      email: "",
+      affiliation: "",
+      country: "",
+      area_of_expertise: "",
+      url: "",                 // ✅ URL compulsory
+      ranking: "Medium Priority",
+      notes: "",
+      host: currentUser?.full_name || "",
+      preferred_date: ""
     });
-  };
   
-  // Get available fellows for a selected date
-  const getAvailableFellowsForDate = (dateId) => {
-    if (!dateId) return [];
-    
-    return seniorFellows.filter(fellow => {
-      const unavailability = userAvailability.find(ua => 
-        ua.user_id === fellow.id && 
-        ua.date_id === dateId && 
-        ua.available === false
-      );
-      return !unavailability;
-    });
-  };
+    const [showDateInfo, setShowDateInfo] = useState(false);
   
-  const availableDatesForHost = getAvailableDatesForHost(form.host);
-  const availableFellowsForDate = form.preferred_date ? getAvailableFellowsForDate(form.preferred_date) : [];
+    const submit = (e) => {
+      e.preventDefault();
   
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <h3 className="text-xl font-semibold mb-4">Propose Speaker</h3>
-        <form onSubmit={submit} className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm block mb-1">Full Name *</label>
-            <input required className="w-full border rounded px-3 py-2" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Email *</label>
-            <input required type="email" className="w-full border rounded px-3 py-2" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Affiliation *</label>
-            <input required className="w-full border rounded px-3 py-2" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Country *</label>
-            <select required className="w-full border rounded px-3 py-2" value={form.country} onChange={e => setForm({ ...form, country: e.target.value })}>
-              <option value="">-- Select Country --</option>
-              {countries.map((c, idx) => c.startsWith('---') ? <option key={idx} disabled>{c}</option> : <option key={idx}>{c}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Area of Expertise *</label>
-            <input required className="w-full border rounded px-3 py-2" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Speaker URL *</label>
-            <input
-              required
-              className="w-full border rounded px-3 py-2"
-              placeholder="https://..."
-              value={form.speaker_url}
-              onChange={e => setForm({ ...form, speaker_url: e.target.value })}
-            />
-            <p className="text-xs text-neutral-500 mt-1">Required (will be clickable in the dashboard).</p>
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Priority</label>
-            <select className="w-full border rounded px-3 py-2" value={form.ranking} onChange={e => setForm({ ...form, ranking: e.target.value })}>
-              <option>High Priority</option>
-              <option>Medium Priority</option>
-              <option>Low Priority</option>
-            </select>
-          </div>
-
-          <div className="col-span-2">
-            <label className="text-sm block mb-2">Images (optional, up to 2)</label>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-xs text-neutral-600 mb-1">Mugshot (square)</div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="w-full"
-                  onChange={e => handleMugshotChange(e.target.files?.[0])}
-                />
-                {mugshotPreview && (
-                  <img
-                    src={mugshotPreview}
-                    alt="Mugshot preview"
-                    className="mt-2 w-full max-h-48 object-cover rounded border"
-                  />
-                )}
-              </div>
-              <div>
-                <div className="text-xs text-neutral-600 mb-1">Science explanation image (16:9)</div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="w-full"
-                  onChange={e => handleScienceChange(e.target.files?.[0])}
-                />
-                {sciencePreview && (
-                  <img
-                    src={sciencePreview}
-                    alt="Science preview"
-                    className="mt-2 w-full max-h-48 object-cover rounded border"
-                  />
-                )}
-              </div>
+      // ✅ Hard guard as well (in case someone bypasses required attribute)
+      if (!form.url?.trim()) {
+        alert("URL is compulsory.");
+        return;
+      }
+  
+      onSubmit(form);
+    };
+  
+    // Get available dates for selected host
+    const getAvailableDatesForHost = (hostName) => {
+      if (!hostName) return [];
+  
+      const hostFellow = seniorFellows.find((f) => f.full_name === hostName);
+      if (!hostFellow)
+        return availableDates.filter((d) => d.available && d.locked_by_id !== "DELETED");
+  
+      return availableDates
+        .filter((d) => {
+          if (!d.available || d.locked_by_id === "DELETED") return false;
+  
+          const hostUnavailable = userAvailability.find(
+            (ua) =>
+              ua.user_id === hostFellow.id &&
+              ua.date_id === d.id &&
+              ua.available === false
+          );
+  
+          return !hostUnavailable;
+        })
+        .sort((a, b) => {
+          const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+          const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+          return dateA - dateB;
+        });
+    };
+  
+    // Get available fellows for a selected date
+    const getAvailableFellowsForDate = (dateId) => {
+      if (!dateId) return [];
+  
+      return seniorFellows.filter((fellow) => {
+        const unavailability = userAvailability.find(
+          (ua) =>
+            ua.user_id === fellow.id &&
+            ua.date_id === dateId &&
+            ua.available === false
+        );
+        return !unavailability;
+      });
+    };
+  
+    const availableDatesForHost = getAvailableDatesForHost(form.host);
+    const availableFellowsForDate = form.preferred_date
+      ? getAvailableFellowsForDate(form.preferred_date)
+      : [];
+  
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <h3 className="text-xl font-semibold mb-4">Propose Speaker</h3>
+  
+          <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm block mb-1">Full Name *</label>
+              <input
+                required
+                className="w-full border rounded px-3 py-2"
+                value={form.full_name}
+                onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+              />
             </div>
-            <p className="text-xs text-neutral-500 mt-2">Images are automatically center-cropped and downscaled to reduce size.</p>
-          </div>
-          <div className="col-span-2">
-            <label className="text-sm block mb-1">Notes</label>
-            <textarea className="w-full border rounded px-3 py-2 min-h-[60px]" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value})} placeholder="Optional notes about why this speaker should be invited" />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Host *</label>
-            <select 
-              required 
-              className="w-full border rounded px-3 py-2" 
-              value={form.host} 
-              onChange={e => {
-                setForm({ ...form, host: e.target.value, preferred_date: '' });
-                setShowDateInfo(false);
-              }}
-            >
-              <option value="">-- Select Host --</option>
-              {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Preferred Date (optional)</label>
-            <select 
-              className="w-full border rounded px-3 py-2" 
-              value={form.preferred_date} 
-              onChange={e => {
-                setForm({ ...form, preferred_date: e.target.value });
-                setShowDateInfo(!!e.target.value);
-              }}
-              disabled={!form.host}
-            >
-              <option value="">-- Select Date --</option>
-              {availableDatesForHost.map(d => (
-                <option key={d.id} value={d.id}>
-                  {formatDate(d.date)} {d.notes ? `(${d.notes})` : ''}
-                </option>
-              ))}
-            </select>
-            {form.host && availableDatesForHost.length === 0 && (
-              <p className="text-xs text-amber-600 mt-1">⚠️ No available dates for this host</p>
-            )}
-          </div>
-          
-          {/* Show available fellows for selected date */}
-          {showDateInfo && availableFellowsForDate.length > 0 && (
-            <div className="col-span-2 p-3 bg-green-50 border border-green-200 rounded">
-              <div className="font-semibold text-green-800 mb-2 text-sm">
-                ✓ {availableFellowsForDate.length} Fellow{availableFellowsForDate.length !== 1 ? 's' : ''} Available on This Date
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs text-green-700">
-                {availableFellowsForDate.map(f => (
-                  <div key={f.id}>• {f.full_name}</div>
+  
+            <div>
+              <label className="text-sm block mb-1">Email *</label>
+              <input
+                required
+                type="email"
+                className="w-full border rounded px-3 py-2"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">Affiliation *</label>
+              <input
+                required
+                className="w-full border rounded px-3 py-2"
+                value={form.affiliation}
+                onChange={(e) => setForm({ ...form, affiliation: e.target.value })}
+              />
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">Country *</label>
+              <select
+                required
+                className="w-full border rounded px-3 py-2"
+                value={form.country}
+                onChange={(e) => setForm({ ...form, country: e.target.value })}
+              >
+                <option value="">-- Select Country --</option>
+                {countries.map((c, idx) =>
+                  c.startsWith("---") ? (
+                    <option key={idx} disabled>
+                      {c}
+                    </option>
+                  ) : (
+                    <option key={idx}>{c}</option>
+                  )
+                )}
+              </select>
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">Area of Expertise *</label>
+              <input
+                required
+                className="w-full border rounded px-3 py-2"
+                value={form.area_of_expertise}
+                onChange={(e) =>
+                  setForm({ ...form, area_of_expertise: e.target.value })
+                }
+              />
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">URL *</label>
+              <input
+                required
+                type="url"
+                className="w-full border rounded px-3 py-2"
+                value={form.url}
+                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                placeholder="https://..."
+              />
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">Priority</label>
+              <select
+                className="w-full border rounded px-3 py-2"
+                value={form.ranking}
+                onChange={(e) => setForm({ ...form, ranking: e.target.value })}
+              >
+                <option>High Priority</option>
+                <option>Medium Priority</option>
+                <option>Low Priority</option>
+              </select>
+            </div>
+  
+            <div className="col-span-2">
+              <label className="text-sm block mb-1">Notes</label>
+              <textarea
+                className="w-full border rounded px-3 py-2 min-h-[60px]"
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                placeholder="Optional notes about why this speaker should be invited"
+              />
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">Host *</label>
+              <select
+                required
+                className="w-full border rounded px-3 py-2"
+                value={form.host}
+                onChange={(e) => {
+                  setForm({ ...form, host: e.target.value, preferred_date: "" });
+                  setShowDateInfo(false);
+                }}
+              >
+                <option value="">-- Select Host --</option>
+                {seniorFellows.map((f) => (
+                  <option key={f.id} value={f.full_name}>
+                    {f.full_name} ({f.role})
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
-          )}
-          
-          <div className="col-span-2 flex justify-end gap-2">
-            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
-            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Propose Speaker</button>
-          </div>
-        </form>
+  
+            <div>
+              <label className="text-sm block mb-1">Preferred Date (optional)</label>
+              <select
+                className="w-full border rounded px-3 py-2"
+                value={form.preferred_date}
+                onChange={(e) => {
+                  setForm({ ...form, preferred_date: e.target.value });
+                  setShowDateInfo(!!e.target.value);
+                }}
+                disabled={!form.host}
+              >
+                <option value="">-- Select Date --</option>
+                {availableDatesForHost.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {formatDate(d.date)} {d.notes ? `(${d.notes})` : ""}
+                  </option>
+                ))}
+              </select>
+  
+              {form.host && availableDatesForHost.length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">
+                  ⚠️ No available dates for this host
+                </p>
+              )}
+            </div>
+  
+            {/* Info box */}
+            {showDateInfo && availableFellowsForDate.length > 0 && (
+              <div className="col-span-2 p-3 bg-green-50 border border-green-200 rounded">
+                <div className="font-semibold text-green-800 mb-2 text-sm">
+                  ✓ {availableFellowsForDate.length} Fellow
+                  {availableFellowsForDate.length !== 1 ? "s" : ""} Available on This
+                  Date
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-green-700">
+                  {availableFellowsForDate.map((f) => (
+                    <div key={f.id}>• {f.full_name}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+  
+            {/* ✅ No image inputs here on purpose */}
+  
+            <div className="col-span-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-3 py-2 border rounded"
+              >
+                Cancel
+              </button>
+              <button type="submit" className="px-3 py-2 bg-primary text-white rounded">
+                Propose Speaker
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
+  
 
 /* ---------------------
    AddPastSpeakerForm
@@ -5750,275 +5774,409 @@ function AddPastSpeakerForm({ onSubmit, onCancel, seniorFellows, countries }) {
 /* ---------------------
    EditSpeakerForm
    --------------------- */
-function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries }) {
-  const [form, setForm] = useState({
-    full_name: speaker.full_name || '',
-    email: speaker.email || '',
-    affiliation: speaker.affiliation || '',
-    country: speaker.country || '',
-    area_of_expertise: speaker.area_of_expertise || '',
-    speaker_url: speaker.speaker_url || '',
-    ranking: speaker.ranking || 'Medium Priority',
-    host: speaker.host || '',
-    mugshot_image: speaker.mugshot_image || null,
-    science_image: speaker.science_image || null
-  });
-  const [mugshotPreview, setMugshotPreview] = useState(speaker.mugshot_image || null);
-  const [sciencePreview, setSciencePreview] = useState(speaker.science_image || null);
-
-  const handleMugshotChange = async (file) => {
-    if (!file) {
-      setForm(prev => ({ ...prev, mugshot_image: null }));
-      setMugshotPreview(null);
-      return;
-    }
-    try {
-      const dataUrl = await processImageFile(file, { targetWidth: 420, targetHeight: 420, quality: 0.7 });
-      setForm(prev => ({ ...prev, mugshot_image: dataUrl }));
-      setMugshotPreview(dataUrl);
-    } catch {
-      alert('Could not process mugshot image. Please try another file.');
-    }
-  };
-
-  const handleScienceChange = async (file) => {
-    if (!file) {
-      setForm(prev => ({ ...prev, science_image: null }));
-      setSciencePreview(null);
-      return;
-    }
-    try {
-      const dataUrl = await processImageFile(file, { targetWidth: 960, targetHeight: 540, quality: 0.7 });
-      setForm(prev => ({ ...prev, science_image: dataUrl }));
-      setSciencePreview(dataUrl);
-    } catch {
-      alert('Could not process science image. Please try another file.');
-    }
-  };
-  const submit = (e) => { e.preventDefault(); onSubmit(form); };
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
-        <h3 className="text-xl font-semibold mb-4">Edit Speaker</h3>
-        <form onSubmit={submit} className="grid grid-cols-2 gap-4">
-          <input className="col-span-2 border rounded px-3 py-2" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
-          <input className="border rounded px-3 py-2" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required />
-          <input className="border rounded px-3 py-2" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} required />
-          <select className="border rounded px-3 py-2" value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} required>
-            <option value="">-- Country --</option>
-            {countries.map((c, idx) => c.startsWith('---') ? <option key={idx} disabled>{c}</option> : <option key={idx}>{c}</option>)}
-          </select>
-          <input className="border rounded px-3 py-2" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} required />
-          <div>
-            <label className="text-sm block mb-1">Speaker URL *</label>
-            <input
-              required
-              className="w-full border rounded px-3 py-2"
-              placeholder="https://..."
-              value={form.speaker_url}
-              onChange={e => setForm({ ...form, speaker_url: e.target.value })}
-            />
-          </div>
-          <select className="border rounded px-3 py-2" value={form.ranking} onChange={e => setForm({ ...form, ranking: e.target.value })}>
-            <option>High Priority</option>
-            <option>Medium Priority</option>
-            <option>Low Priority</option>
-          </select>
-          <div className="col-span-2">
-            <label className="text-sm block mb-2">Images (optional, up to 2)</label>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-xs text-neutral-600 mb-1">Mugshot (square)</div>
-                <input type="file" accept="image/*" className="w-full" onChange={e => handleMugshotChange(e.target.files?.[0])} />
-                {mugshotPreview && <img src={mugshotPreview} alt="Mugshot preview" className="mt-2 w-full max-h-48 object-cover rounded border" />}
-                {mugshotPreview && (
-                  <button type="button" onClick={() => handleMugshotChange(null)} className="mt-2 text-xs text-red-600 hover:underline">
-                    Remove mugshot
-                  </button>
-                )}
-              </div>
-              <div>
-                <div className="text-xs text-neutral-600 mb-1">Science explanation image (16:9)</div>
-                <input type="file" accept="image/*" className="w-full" onChange={e => handleScienceChange(e.target.files?.[0])} />
-                {sciencePreview && <img src={sciencePreview} alt="Science preview" className="mt-2 w-full max-h-48 object-cover rounded border" />}
-                {sciencePreview && (
-                  <button type="button" onClick={() => handleScienceChange(null)} className="mt-2 text-xs text-red-600 hover:underline">
-                    Remove science image
-                  </button>
-                )}
-              </div>
-            </div>
-            <p className="text-xs text-neutral-500 mt-2">Images are automatically center-cropped and downscaled to reduce size.</p>
-          </div>
-          <select className="border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} required>
-            <option value="">-- Host --</option>
-            {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
-          </select>
-          <div className="col-span-2 flex justify-end gap-2">
-            <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
-            <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------
-   EditConfirmedSpeakerForm
-   --------------------- */
-  function EditConfirmedSpeakerForm({ speaker, availableDates, onSubmit, onDelete, onCancel, formatDate, seniorFellows, userAvailability }) {
-    const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
+   function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries }) {
     const [form, setForm] = useState({
-      talk_title: speaker.talk_title || '',
-      talk_abstract: speaker.talk_abstract || '',
+      full_name: speaker.full_name || '',
+      email: speaker.email || '',
+      affiliation: speaker.affiliation || '',
+      country: speaker.country || '',
+      area_of_expertise: speaker.area_of_expertise || '',
+      ranking: speaker.ranking || 'Medium Priority',
       host: speaker.host || '',
-      host_type: speaker.host ? 'fellow' : 'other',
-      custom_host: '',
-      assigned_date: speaker.assigned_date ? (speaker.assigned_date.toDate ? speaker.assigned_date.toDate().toISOString().split('T')[0] : new Date(speaker.assigned_date).toISOString().split('T')[0]) : '',
-      current_date_id: currentLockedDate?.id || null,
-      new_date_id: currentLockedDate?.id || null,
-      old_date_id: currentLockedDate?.id || null
+      // Images (added only through editing)
+      mugshot_image: speaker.mugshot_image || '',
+      science_image: speaker.science_image || ''
     });
   
-    const submit = (e) => { 
-      e.preventDefault(); 
-      const finalForm = {
-        ...form,
-        host: form.host_type === 'other' ? form.custom_host : form.host
-      };
-      onSubmit(finalForm); 
-    };
+    const [mugshotFile, setMugshotFile] = useState(null);
+    const [scienceFile, setScienceFile] = useState(null);
   
-    // Filter dates: available OR current locked date
-    const selectableDates = availableDates.filter(d => 
-      (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED'
-    );
-    
-    // Get available hosts for the selected date (fellows who are NOT unavailable)
-    const getAvailableHosts = (dateId) => {
-      if (!dateId) return [];
-      
-      return seniorFellows.filter(fellow => {
-        // Check if this fellow is marked as unavailable for this date
-        const unavailability = userAvailability.find(ua => 
-          ua.user_id === fellow.id && 
-          ua.date_id === dateId && 
-          ua.available === false
-        );
-        
-        return !unavailability; // Only include if NOT unavailable
-      });
+    const submit = async (e) => {
+      e.preventDefault();
+  
+      const update = { ...form };
+  
+      // Only process when user selected new files
+      if (mugshotFile) {
+        update.mugshot_image = await processImageFile(mugshotFile, {
+          targetWidth: 600,
+          targetHeight: 600,
+          quality: 0.7
+        });
+      }
+      if (scienceFile) {
+        update.science_image = await processImageFile(scienceFile, {
+          targetWidth: 960,
+          targetHeight: 540, // 16:9
+          quality: 0.7
+        });
+      }
+  
+      onSubmit(update);
     };
-    
-    const availableHosts = getAvailableHosts(form.new_date_id);
   
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-          <h3 className="text-xl font-semibold mb-4">Edit Confirmed Speaker</h3>
-          <form onSubmit={submit} className="space-y-4">
-            <div>
-              <label className="text-sm block mb-1">Talk Title</label>
-              <input className="w-full border rounded px-3 py-2" value={form.talk_title} onChange={e => setForm({ ...form, talk_title: e.target.value })} required />
-            </div>
-            <div>
-              <label className="text-sm block mb-1">Talk Abstract</label>
-              <textarea className="w-full border rounded px-3 py-2 min-h-[120px]" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
-            </div>
-            
-            {/* Assigned Date - moved before host for dependency */}
-            <div>
-              <label className="text-sm block mb-1">Assigned Date</label>
-              <select className="w-full border rounded px-3 py-2" value={form.new_date_id || ''} onChange={(e) => {
-                const selectedDateId = e.target.value;
-                const selectedDate = availableDates.find(d => d.id === selectedDateId);
-                setForm({
-                  ...form,
-                  new_date_id: selectedDateId,
-                  assigned_date: selectedDate?.date ? (selectedDate.date.toDate ? selectedDate.date.toDate().toISOString().split('T')[0] : new Date(selectedDate.date).toISOString().split('T')[0]) : '',
-                  host: '', // Reset host when date changes
-                  host_type: 'fellow'
-                });
-              }} required>
-                <option value="">-- Select Date --</option>
-                {selectableDates.map(d => <option key={d.id} value={d.id}>{formatDate(d.date)} - {d.host || 'TBD'} {d.notes ? `(${d.notes})` : ''}{d.id === currentLockedDate?.id ? ' (Current)' : ''}</option>)}
-              </select>
-            </div>
-            
-            {/* Host Selection */}
-            <div>
-              <label className="text-sm block mb-1">Host</label>
-              <select 
-                className="w-full border rounded px-3 py-2 mb-2" 
-                value={form.host_type} 
-                onChange={e => setForm({ ...form, host_type: e.target.value, host: '', custom_host: '' })}
-              >
-                <option value="fellow">Select from available fellows</option>
-                <option value="other">Other (specify)</option>
-              </select>
-              
-              {form.host_type === 'fellow' ? (
-                <>
-                  <select 
-                    className="w-full border rounded px-3 py-2" 
-                    value={form.host} 
-                    onChange={e => setForm({ ...form, host: e.target.value })} 
-                    required
-                  >
-                    <option value="">-- Select Host --</option>
-                    {availableHosts.map(f => (
-                      <option key={f.id} value={f.full_name}>
-                        {f.full_name} ({f.role})
-                      </option>
-                    ))}
-                  </select>
-                  
-                  {/* Show available fellows info */}
-                  {form.new_date_id && availableHosts.length > 0 && (
-                    <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded text-sm">
-                      <div className="font-semibold text-green-800 mb-2">✓ {availableHosts.length} Fellow{availableHosts.length !== 1 ? 's' : ''} Available</div>
-                      <div className="space-y-1 text-xs text-green-700">
-                        {availableHosts.slice(0, 5).map(f => (
-                          <div key={f.id}>• {f.full_name}</div>
-                        ))}
-                        {availableHosts.length > 5 && (
-                          <div className="italic">+ {availableHosts.length - 5} more...</div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {form.new_date_id && availableHosts.length === 0 && (
-                    <p className="text-xs text-amber-600 mt-2 p-2 bg-amber-50 border border-amber-200 rounded">
-                      ⚠️ No fellows are available on this date. Consider using "Other" option or choosing a different date.
-                    </p>
-                  )}
-                </>
-              ) : (
-                <input 
-                  className="w-full border rounded px-3 py-2" 
-                  placeholder="Enter host name" 
-                  value={form.custom_host} 
-                  onChange={e => setForm({ ...form, custom_host: e.target.value })} 
-                  required
-                />
+        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+          <h3 className="text-xl font-semibold mb-4">Edit Speaker</h3>
+  
+          <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+            <input
+              className="col-span-2 border rounded px-3 py-2"
+              value={form.full_name}
+              onChange={e => setForm({ ...form, full_name: e.target.value })}
+              required
+            />
+            <input
+              className="border rounded px-3 py-2"
+              value={form.email}
+              onChange={e => setForm({ ...form, email: e.target.value })}
+              required
+            />
+            <input
+              className="border rounded px-3 py-2"
+              value={form.affiliation}
+              onChange={e => setForm({ ...form, affiliation: e.target.value })}
+              required
+            />
+            <select
+              className="border rounded px-3 py-2"
+              value={form.country}
+              onChange={e => setForm({ ...form, country: e.target.value })}
+              required
+            >
+              <option value="">-- Country --</option>
+              {countries.map((c, idx) =>
+                c.startsWith('---')
+                  ? <option key={idx} disabled>{c}</option>
+                  : <option key={idx}>{c}</option>
               )}
+            </select>
+  
+            <input
+              className="border rounded px-3 py-2"
+              value={form.area_of_expertise}
+              onChange={e => setForm({ ...form, area_of_expertise: e.target.value })}
+              required
+            />
+  
+            <select
+              className="border rounded px-3 py-2"
+              value={form.ranking}
+              onChange={e => setForm({ ...form, ranking: e.target.value })}
+            >
+              <option>High Priority</option>
+              <option>Medium Priority</option>
+              <option>Low Priority</option>
+            </select>
+  
+            <select
+              className="border rounded px-3 py-2"
+              value={form.host}
+              onChange={e => setForm({ ...form, host: e.target.value })}
+              required
+            >
+              <option value="">-- Host --</option>
+              {seniorFellows.map(f => (
+                <option key={f.id} value={f.full_name}>
+                  {f.full_name} ({f.role})
+                </option>
+              ))}
+            </select>
+  
+            {/* Images are only editable here (NOT when proposing a new speaker) */}  
+            <div className="col-span-2 border-t pt-4 mt-2">
+              <div className="text-sm font-semibold mb-2">Images (optional)</div>
+  
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm block mb-1">Mugshot (square)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="w-full"
+                    onChange={(e) => setMugshotFile(e.target.files?.[0] || null)}
+                  />
+                  {form.mugshot_image && (
+                    <img
+                      src={form.mugshot_image}
+                      alt="Speaker mugshot"
+                      className="mt-2 w-24 h-24 object-cover rounded"
+                    />
+                  )}
+                </div>
+  
+                <div>
+                  <label className="text-sm block mb-1">Science explanation (16:9)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="w-full"
+                    onChange={(e) => setScienceFile(e.target.files?.[0] || null)}
+                  />
+                  {form.science_image && (
+                    <img
+                      src={form.science_image}
+                      alt="Scientific illustration related to the talk"
+                      className="mt-2 w-full max-w-[220px] h-[124px] object-cover rounded"
+                    />
+                  )}
+                </div>
+              </div>
+  
+              <p className="text-xs text-gray-500 mt-2">
+                Images are automatically center-cropped, downscaled, and JPEG-compressed when you save.
+              </p>
             </div>
   
-            <div className="flex justify-between gap-2 pt-4 border-t">
+            <div className="col-span-2 flex justify-end gap-2">
               <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
-              <div className="flex gap-2">
-                <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
-                <button type="button" onClick={() => onDelete(speaker.id)} className="px-3 py-2 bg-red-600 text-white rounded">Delete Speaker</button>
-              </div>
+              <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
             </div>
           </form>
         </div>
       </div>
     );
   }
+  
 
+/* ---------------------
+   EditConfirmedSpeakerForm
+   --------------------- */
+   function EditConfirmedSpeakerForm({
+    speaker,
+    availableDates,
+    onSubmit,
+    onDelete,
+    onCancel,
+    formatDate,
+    seniorFellows,
+    userAvailability
+  }) {
+    const currentLockedDate = availableDates.find(d => d.locked_by_id === speaker.id);
+  
+    const [form, setForm] = useState({
+      talk_title: speaker.talk_title || '',
+      talk_abstract: speaker.talk_abstract || '',
+      // Images (added only through editing)
+      mugshot_image: speaker.mugshot_image || '',
+      science_image: speaker.science_image || '',
+      host: speaker.host || '',
+      host_type: speaker.host ? 'fellow' : 'other',
+      custom_host: '',
+      assigned_date: speaker.assigned_date
+        ? (speaker.assigned_date.toDate
+            ? speaker.assigned_date.toDate().toISOString().split('T')[0]
+            : new Date(speaker.assigned_date).toISOString().split('T')[0])
+        : '',
+      current_date_id: currentLockedDate?.id || null,
+      new_date_id: currentLockedDate?.id || null,
+      old_date_id: currentLockedDate?.id || null
+    });
+  
+    const [mugshotFile, setMugshotFile] = useState(null);
+    const [scienceFile, setScienceFile] = useState(null);
+  
+    const submit = async (e) => {
+      e.preventDefault();
+  
+      const finalForm = {
+        ...form,
+        host: form.host_type === 'other' ? form.custom_host : form.host
+      };
+  
+      // Only process when user selected new files
+      if (mugshotFile) {
+        finalForm.mugshot_image = await processImageFile(mugshotFile, {
+          targetWidth: 600,
+          targetHeight: 600,
+          quality: 0.7
+        });
+      }
+      if (scienceFile) {
+        finalForm.science_image = await processImageFile(scienceFile, {
+          targetWidth: 960,
+          targetHeight: 540,
+          quality: 0.7
+        });
+      }
+  
+      onSubmit(finalForm);
+    };
+  
+    // Filter dates: available OR current locked date
+    const selectableDates = availableDates.filter(d =>
+      (d.available || d.id === currentLockedDate?.id) && d.locked_by_id !== 'DELETED'
+    );
+  
+    // Get available hosts for the selected date (fellows who are NOT unavailable)
+    const getAvailableHosts = (dateId) => {
+      if (!dateId) return [];
+      return seniorFellows.filter(fellow => {
+        const unavailability = userAvailability.find(ua =>
+          ua.user_id === fellow.id &&
+          ua.date_id === dateId &&
+          ua.available === false
+        );
+        return !unavailability;
+      });
+    };
+  
+    const availableHosts = getAvailableHosts(form.new_date_id);
+  
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <h3 className="text-xl font-semibold mb-4">Edit Confirmed Speaker</h3>
+  
+          <form onSubmit={submit} className="space-y-4">
+            <div>
+              <label className="text-sm block mb-1">Talk Title</label>
+              <input
+                className="w-full border rounded px-3 py-2"
+                value={form.talk_title}
+                onChange={e => setForm({ ...form, talk_title: e.target.value })}
+                required
+              />
+            </div>
+  
+            <div>
+              <label className="text-sm block mb-1">Talk Abstract</label>
+              <textarea
+                className="w-full border rounded px-3 py-2 min-h-[120px]"
+                value={form.talk_abstract}
+                onChange={e => setForm({ ...form, talk_abstract: e.target.value })}
+              />
+            </div>
+  
+            {/* Images are only editable in edit forms (NOT when proposing a new speaker) */}
+            <div className="border rounded p-4 bg-gray-50">
+              <div className="text-sm font-semibold mb-2">Images (optional)</div>
+  
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm block mb-1">Mugshot (square)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="w-full"
+                    onChange={(e) => setMugshotFile(e.target.files?.[0] || null)}
+                  />
+                  {form.mugshot_image && (
+                    <img
+                      src={form.mugshot_image}
+                      alt="Mugshot preview"
+                      className="mt-2 w-24 h-24 object-cover rounded"
+                    />
+                  )}
+                </div>
+  
+                <div>
+                  <label className="text-sm block mb-1">Science explanation (16:9)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="w-full"
+                    onChange={(e) => setScienceFile(e.target.files?.[0] || null)}
+                  />
+                  {form.science_image && (
+                    <img
+                      src={form.science_image}
+                      alt="Scientific illustration related to the talk"
+                      className="mt-2 w-full max-w-[220px] h-[124px] object-cover rounded"
+                    />
+                  )}
+                </div>
+              </div>
+  
+              <p className="text-xs text-gray-500 mt-2">
+                Images are automatically center-cropped, downscaled, and JPEG-compressed when you save.
+              </p>
+            </div>
+  
+            {/* Assigned Date */}
+            <div>
+              <label className="text-sm block mb-1">Assigned Date</label>
+              <select
+                className="w-full border rounded px-3 py-2"
+                value={form.new_date_id || ''}
+                onChange={(e) => {
+                  const selectedDateId = e.target.value;
+                  const selectedDate = availableDates.find(d => d.id === selectedDateId);
+                  setForm({
+                    ...form,
+                    new_date_id: selectedDateId,
+                    assigned_date: selectedDate?.date
+                      ? (selectedDate.date.toDate
+                          ? selectedDate.date.toDate().toISOString().split('T')[0]
+                          : new Date(selectedDate.date).toISOString().split('T')[0])
+                      : '',
+                    host: '',
+                    host_type: 'fellow'
+                  });
+                }}
+                required
+              >
+                <option value="">-- Select Date --</option>
+                {selectableDates.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {formatDate(d.date)} - {d.host || 'TBD'} {d.notes ? `(${d.notes})` : ''}
+                    {d.id === currentLockedDate?.id ? ' (Current)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+  
+            {/* Host Selection */}
+            <div>
+              <label className="text-sm block mb-1">Host</label>
+              <select
+                className="w-full border rounded px-3 py-2 mb-2"
+                value={form.host_type}
+                onChange={e => setForm({ ...form, host_type: e.target.value, host: '', custom_host: '' })}
+              >
+                <option value="fellow">Select from available fellows</option>
+                <option value="other">Other (specify)</option>
+              </select>
+  
+              {form.host_type === 'fellow' ? (
+                <select
+                  className="w-full border rounded px-3 py-2"
+                  value={form.host}
+                  onChange={e => setForm({ ...form, host: e.target.value })}
+                  required
+                >
+                  <option value="">-- Select Fellow --</option>
+                  {availableHosts.map(f => (
+                    <option key={f.id} value={f.full_name}>
+                      {f.full_name} ({f.role})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="w-full border rounded px-3 py-2"
+                  placeholder="Enter host name"
+                  value={form.custom_host}
+                  onChange={e => setForm({ ...form, custom_host: e.target.value })}
+                  required
+                />
+              )}
+            </div>
+  
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
+              <button type="button" onClick={() => onDelete(speaker.id)} className="px-3 py-2 border rounded text-red-600">
+                Delete Speaker
+              </button>
+              <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+  
 /* ---------------------
    InviteUserForm
    --------------------- */
