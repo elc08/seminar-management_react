@@ -71,14 +71,6 @@ const normalizeUrl = (raw) => {
   return `https://${trimmed}`;
 };
 
-const isValidHttpUrl = (raw) => {
-  try {
-    const u = new URL(normalizeUrl(raw));
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
 
 // Image processing helper: center-crop to target aspect and downscale.
 // Returns a data URL (JPEG) for lightweight storage.
@@ -504,29 +496,44 @@ const handleDeleteDate = async (dateId) => {
   }
 };
 
-  const handleAddSpeaker = async (formData) => {
-    try {
-      if (!formData?.speaker_url || !isValidHttpUrl(formData.speaker_url)) {
-        alert('Please provide a valid URL (including http(s):// or a domain).');
-        return;
-      }
-      const token = generateToken();
-      await addDoc(collection(db, 'speakers'), {
-        ...formData,
-        status: 'Proposed',
-        proposed_by_id: user.uid,
-        proposed_by_name: userRole.full_name,
-        access_token: token,
-        actions: [],
-        votes: [],
-        createdAt: serverTimestamp()
-      });
-      await loadSpeakers();
-      setShowAddSpeakerForm(false);
-    } catch (err) {
-      alert('Error adding speaker: ' + (err.message || err));
+const handleAddSpeaker = async (formData) => {
+  try {
+    // Accept both keys to avoid mismatches
+    const rawUrl = (formData?.speaker_url ?? formData?.url ?? "").trim();
+
+    if (!rawUrl) {
+      alert("URL is compulsory.");
+      return;
     }
-  };
+
+    const token = generateToken();
+
+    const cleanData = {
+      ...formData,
+      speaker_url: rawUrl, // store canonically as speaker_url
+    };
+
+    // Optional: remove legacy url key so you don't end up with both
+    delete cleanData.url;
+
+    await addDoc(collection(db, "speakers"), {
+      ...cleanData,
+      status: "Proposed",
+      proposed_by_id: user.uid,
+      proposed_by_name: userRole.full_name,
+      access_token: token,
+      actions: [],
+      votes: [],
+      createdAt: serverTimestamp(),
+    });
+
+    await loadSpeakers();
+    setShowAddSpeakerForm(false);
+  } catch (err) {
+    alert("Error adding speaker: " + (err.message || err));
+  }
+};
+
 
   const handleAddPastSpeaker = async (formData) => {
     try {
@@ -670,18 +677,28 @@ const handleDeleteDate = async (dateId) => {
   const handleEditSpeaker = async (formData) => {
     try {
       if (!editingSpeaker) return;
-      if (!formData?.speaker_url || !isValidHttpUrl(formData.speaker_url)) {
-        alert('Please provide a valid URL (including http(s):// or a domain).');
+  
+      const rawUrl = (formData?.speaker_url ?? formData?.url ?? "").trim();
+      if (!rawUrl) {
+        alert("URL is compulsory.");
         return;
       }
-      await updateDoc(doc(db, 'speakers', editingSpeaker.id), formData);
+  
+      const cleanData = {
+        ...formData,
+        speaker_url: rawUrl,
+      };
+      delete cleanData.url;
+  
+      await updateDoc(doc(db, "speakers", editingSpeaker.id), cleanData);
       await loadSpeakers();
       setShowEditSpeakerForm(false);
       setEditingSpeaker(null);
     } catch (err) {
-      alert('Error updating speaker: ' + (err.message || err));
+      alert("Error updating speaker: " + (err.message || err));
     }
   };
+  
 
   const handleEditConfirmedSpeaker = async (formData) => {
     try {
@@ -5478,7 +5495,7 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
       affiliation: "",
       country: "",
       area_of_expertise: "",
-      url: "",                 // ✅ URL compulsory
+      speaker_url: "", // ✅ canonical field name
       ranking: "Medium Priority",
       notes: "",
       host: currentUser?.full_name || "",
@@ -5487,31 +5504,26 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
   
     const [showDateInfo, setShowDateInfo] = useState(false);
   
-    const submit = (e) => {
-      e.preventDefault();
-  
-      // ✅ Hard guard as well (in case someone bypasses required attribute)
-      if (!form.url?.trim()) {
-        alert("URL is compulsory.");
-        return;
-      }
-  
-      onSubmit(form);
-    };
-  
-    // Get available dates for selected host
     const getAvailableDatesForHost = (hostName) => {
       if (!hostName) return [];
   
       const hostFellow = seniorFellows.find((f) => f.full_name === hostName);
-      if (!hostFellow)
-        return availableDates.filter((d) => d.available && d.locked_by_id !== "DELETED");
   
-      return availableDates
+      if (!hostFellow) {
+        return (availableDates || [])
+          .filter((d) => d.available && d.locked_by_id !== "DELETED")
+          .sort((a, b) => {
+            const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+            const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+            return dateA - dateB;
+          });
+      }
+  
+      return (availableDates || [])
         .filter((d) => {
           if (!d.available || d.locked_by_id === "DELETED") return false;
   
-          const hostUnavailable = userAvailability.find(
+          const hostUnavailable = (userAvailability || []).find(
             (ua) =>
               ua.user_id === hostFellow.id &&
               ua.date_id === d.id &&
@@ -5527,70 +5539,59 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
         });
     };
   
-    // Get available fellows for a selected date
-    const getAvailableFellowsForDate = (dateId) => {
-      if (!dateId) return [];
+    const availableDatesForHost = getAvailableDatesForHost(form.host);
   
-      return seniorFellows.filter((fellow) => {
-        const unavailability = userAvailability.find(
-          (ua) =>
-            ua.user_id === fellow.id &&
-            ua.date_id === dateId &&
-            ua.available === false
-        );
-        return !unavailability;
+    const submit = (e) => {
+      e.preventDefault();
+      onSubmit({
+        ...form,
+        speaker_url: form.speaker_url.trim()
       });
     };
   
-    const availableDatesForHost = getAvailableDatesForHost(form.host);
-    const availableFellowsForDate = form.preferred_date
-      ? getAvailableFellowsForDate(form.preferred_date)
-      : [];
-  
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
           <h3 className="text-xl font-semibold mb-4">Propose Speaker</h3>
   
           <form onSubmit={submit} className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm block mb-1">Full Name *</label>
+            <div className="col-span-2">
+              <label className="text-sm block mb-1">Full name *</label>
               <input
-                required
                 className="w-full border rounded px-3 py-2"
                 value={form.full_name}
                 onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                required
               />
             </div>
   
             <div>
               <label className="text-sm block mb-1">Email *</label>
               <input
-                required
-                type="email"
                 className="w-full border rounded px-3 py-2"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
+                required
               />
             </div>
   
             <div>
               <label className="text-sm block mb-1">Affiliation *</label>
               <input
-                required
                 className="w-full border rounded px-3 py-2"
                 value={form.affiliation}
                 onChange={(e) => setForm({ ...form, affiliation: e.target.value })}
+                required
               />
             </div>
   
             <div>
               <label className="text-sm block mb-1">Country *</label>
               <select
-                required
                 className="w-full border rounded px-3 py-2"
                 value={form.country}
                 onChange={(e) => setForm({ ...form, country: e.target.value })}
+                required
               >
                 <option value="">-- Select Country --</option>
                 {countries.map((c, idx) =>
@@ -5608,25 +5609,29 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
             <div>
               <label className="text-sm block mb-1">Area of Expertise *</label>
               <input
-                required
                 className="w-full border rounded px-3 py-2"
                 value={form.area_of_expertise}
                 onChange={(e) =>
                   setForm({ ...form, area_of_expertise: e.target.value })
                 }
+                required
               />
             </div>
   
-            <div>
-              <label className="text-sm block mb-1">URL *</label>
+            <div className="col-span-2">
+              <label className="text-sm block mb-1">Speaker URL *</label>
               <input
-                required
-                type="url"
                 className="w-full border rounded px-3 py-2"
-                value={form.url}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
-                placeholder="https://..."
+                value={form.speaker_url}
+                onChange={(e) =>
+                  setForm({ ...form, speaker_url: e.target.value })
+                }
+                placeholder="e.g. lab page, Google Scholar, university profile…"
+                required
               />
+              <div className="text-xs text-gray-500 mt-1">
+                No validation beyond “non-empty”.
+              </div>
             </div>
   
             <div>
@@ -5690,38 +5695,16 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
                   </option>
                 ))}
               </select>
-  
-              {form.host && availableDatesForHost.length === 0 && (
-                <p className="text-xs text-amber-600 mt-1">
-                  ⚠️ No available dates for this host
-                </p>
-              )}
             </div>
   
-            {/* Info box */}
-            {showDateInfo && availableFellowsForDate.length > 0 && (
-              <div className="col-span-2 p-3 bg-green-50 border border-green-200 rounded">
-                <div className="font-semibold text-green-800 mb-2 text-sm">
-                  ✓ {availableFellowsForDate.length} Fellow
-                  {availableFellowsForDate.length !== 1 ? "s" : ""} Available on This
-                  Date
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-green-700">
-                  {availableFellowsForDate.map((f) => (
-                    <div key={f.id}>• {f.full_name}</div>
-                  ))}
-                </div>
+            {showDateInfo && (
+              <div className="col-span-2 text-sm text-gray-600">
+                Preferred date noted (not a lock).
               </div>
             )}
   
-            {/* ✅ No image inputs here on purpose */}
-  
-            <div className="col-span-2 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="px-3 py-2 border rounded"
-              >
+            <div className="col-span-2 flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">
                 Cancel
               </button>
               <button type="submit" className="px-3 py-2 bg-primary text-white rounded">
@@ -5733,6 +5716,8 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
       </div>
     );
   }
+  
+  
   
 
 /* ---------------------
