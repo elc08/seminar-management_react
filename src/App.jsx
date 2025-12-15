@@ -61,6 +61,68 @@ const COUNTRIES = [
 
 const generateToken = () => Math.random().toString(36).substring(2) + Date.now().toString(36);
 
+// URL helpers (speaker proposals require a URL)
+const normalizeUrl = (raw) => {
+  if (!raw) return '';
+  const trimmed = String(raw).trim();
+  if (!trimmed) return '';
+  // If user entered without protocol, default to https
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+};
+
+const isValidHttpUrl = (raw) => {
+  try {
+    const u = new URL(normalizeUrl(raw));
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+// Image processing helper: center-crop to target aspect and downscale.
+// Returns a data URL (JPEG) for lightweight storage.
+const processImageFile = (file, { targetWidth, targetHeight, quality = 0.7 } = {}) => {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve(null);
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read image'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        const tw = targetWidth || 600;
+        const th = targetHeight || 600;
+        canvas.width = tw;
+        canvas.height = th;
+
+        // Center-crop to desired aspect ratio
+        const targetAspect = tw / th;
+        const srcAspect = img.width / img.height;
+        let sx = 0, sy = 0, sw = img.width, sh = img.height;
+        if (srcAspect > targetAspect) {
+          // source too wide
+          sw = Math.round(img.height * targetAspect);
+          sx = Math.round((img.width - sw) / 2);
+        } else if (srcAspect < targetAspect) {
+          // source too tall
+          sh = Math.round(img.width / targetAspect);
+          sy = Math.round((img.height - sh) / 2);
+        }
+
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw, th);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
 const formatDate = (timestamp) => {
   if (!timestamp) return 'N/A';
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
@@ -444,6 +506,10 @@ const handleDeleteDate = async (dateId) => {
 
   const handleAddSpeaker = async (formData) => {
     try {
+      if (!formData?.speaker_url || !isValidHttpUrl(formData.speaker_url)) {
+        alert('Please provide a valid URL (including http(s):// or a domain).');
+        return;
+      }
       const token = generateToken();
       await addDoc(collection(db, 'speakers'), {
         ...formData,
@@ -604,6 +670,10 @@ const handleDeleteDate = async (dateId) => {
   const handleEditSpeaker = async (formData) => {
     try {
       if (!editingSpeaker) return;
+      if (!formData?.speaker_url || !isValidHttpUrl(formData.speaker_url)) {
+        alert('Please provide a valid URL (including http(s):// or a domain).');
+        return;
+      }
       await updateDoc(doc(db, 'speakers', editingSpeaker.id), formData);
       await loadSpeakers();
       setShowEditSpeakerForm(false);
@@ -2275,6 +2345,11 @@ function SignupView({ invitation, onSignup }) {
       if (currentUser.role === 'Organizer') return true;
       return speaker.host === currentUser.full_name;
     };
+
+    // Proposed speaker editing: allow Organizers and Senior Fellows
+    const canEditProposedSpeaker = () => {
+      return currentUser.role === 'Organizer' || currentUser.role === 'Senior Fellow';
+    };
   
     const visibleLunchReminders = upcomingLunchReminders 
       ? upcomingLunchReminders.filter(s => !dismissedLunchReminders.has(s.id))
@@ -2397,6 +2472,17 @@ function SignupView({ invitation, onSignup }) {
                           <span className="text-neutral-500">▶</span>
                           <div className="font-semibold">{s.full_name}</div>
                           <div className="text-sm text-neutral-600">{s.affiliation}</div>
+                          {s.speaker_url && (
+                            <a
+                              href={normalizeUrl(s.speaker_url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-primary hover:underline break-all"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Link
+                            </a>
+                          )}
                           <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
                             {s.ranking}
                           </span>
@@ -2437,6 +2523,17 @@ function SignupView({ invitation, onSignup }) {
                               </button>
                             </>
                           )}
+                          {canEditProposedSpeaker() && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onEditSpeaker(s);
+                              }}
+                              className="px-3 py-1 bg-amber-500 text-white rounded text-sm hover:bg-amber-600"
+                            >
+                              Edit
+                            </button>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -2451,6 +2548,19 @@ function SignupView({ invitation, onSignup }) {
                             <div className="text-sm text-neutral-600 mt-1 ml-7">
                               {s.area_of_expertise} • {s.affiliation} • {s.country}
                             </div>
+                            {s.speaker_url && (
+                              <div className="text-sm mt-2 ml-7">
+                                <a
+                                  href={normalizeUrl(s.speaker_url)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-primary hover:underline break-all"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {s.speaker_url}
+                                </a>
+                              </div>
+                            )}
                             <div className="text-xs text-neutral-500 mt-2 ml-7">
                               Proposed by {s.proposed_by_name} • Host: {s.host}
                             </div>
@@ -2500,6 +2610,17 @@ function SignupView({ invitation, onSignup }) {
                                   Decline
                                 </button>
                               </div>
+                            )}
+                            {canEditProposedSpeaker() && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onEditSpeaker(s);
+                                }}
+                                className="px-3 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 transition-colors"
+                              >
+                                Edit
+                              </button>
                             )}
                           </div>
                         </div>
@@ -5348,15 +5469,53 @@ function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countr
     affiliation: '', 
     country: '', 
     area_of_expertise: '', 
+    speaker_url: '',
     ranking: 'Medium Priority', 
     notes: '', 
     host: currentUser?.full_name || '',
-    preferred_date: ''
+    preferred_date: '',
+    mugshot_image: null,
+    science_image: null
   });
+
+  const [mugshotPreview, setMugshotPreview] = useState(null);
+  const [sciencePreview, setSciencePreview] = useState(null);
   
   const [showDateInfo, setShowDateInfo] = useState(false);
   
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
+
+  const handleMugshotChange = async (file) => {
+    if (!file) {
+      setForm(prev => ({ ...prev, mugshot_image: null }));
+      setMugshotPreview(null);
+      return;
+    }
+    try {
+      // Mugshot: square, downscaled
+      const dataUrl = await processImageFile(file, { targetWidth: 420, targetHeight: 420, quality: 0.7 });
+      setForm(prev => ({ ...prev, mugshot_image: dataUrl }));
+      setMugshotPreview(dataUrl);
+    } catch (e) {
+      alert('Could not process mugshot image. Please try another file.');
+    }
+  };
+
+  const handleScienceChange = async (file) => {
+    if (!file) {
+      setForm(prev => ({ ...prev, science_image: null }));
+      setSciencePreview(null);
+      return;
+    }
+    try {
+      // Science explanation image: 16:9, downscaled
+      const dataUrl = await processImageFile(file, { targetWidth: 960, targetHeight: 540, quality: 0.7 });
+      setForm(prev => ({ ...prev, science_image: dataUrl }));
+      setSciencePreview(dataUrl);
+    } catch (e) {
+      alert('Could not process science image. Please try another file.');
+    }
+  };
   
   // Get available dates for selected host
   const getAvailableDatesForHost = (hostName) => {
@@ -5429,12 +5588,62 @@ function AddSpeakerForm({ onSubmit, onCancel, seniorFellows, currentUser, countr
             <input required className="w-full border rounded px-3 py-2" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} />
           </div>
           <div>
+            <label className="text-sm block mb-1">Speaker URL *</label>
+            <input
+              required
+              className="w-full border rounded px-3 py-2"
+              placeholder="https://..."
+              value={form.speaker_url}
+              onChange={e => setForm({ ...form, speaker_url: e.target.value })}
+            />
+            <p className="text-xs text-neutral-500 mt-1">Required (will be clickable in the dashboard).</p>
+          </div>
+          <div>
             <label className="text-sm block mb-1">Priority</label>
             <select className="w-full border rounded px-3 py-2" value={form.ranking} onChange={e => setForm({ ...form, ranking: e.target.value })}>
               <option>High Priority</option>
               <option>Medium Priority</option>
               <option>Low Priority</option>
             </select>
+          </div>
+
+          <div className="col-span-2">
+            <label className="text-sm block mb-2">Images (optional, up to 2)</label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs text-neutral-600 mb-1">Mugshot (square)</div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="w-full"
+                  onChange={e => handleMugshotChange(e.target.files?.[0])}
+                />
+                {mugshotPreview && (
+                  <img
+                    src={mugshotPreview}
+                    alt="Mugshot preview"
+                    className="mt-2 w-full max-h-48 object-cover rounded border"
+                  />
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-neutral-600 mb-1">Science explanation image (16:9)</div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="w-full"
+                  onChange={e => handleScienceChange(e.target.files?.[0])}
+                />
+                {sciencePreview && (
+                  <img
+                    src={sciencePreview}
+                    alt="Science preview"
+                    className="mt-2 w-full max-h-48 object-cover rounded border"
+                  />
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-neutral-500 mt-2">Images are automatically center-cropped and downscaled to reduce size.</p>
           </div>
           <div className="col-span-2">
             <label className="text-sm block mb-1">Notes</label>
@@ -5548,9 +5757,44 @@ function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries
     affiliation: speaker.affiliation || '',
     country: speaker.country || '',
     area_of_expertise: speaker.area_of_expertise || '',
+    speaker_url: speaker.speaker_url || '',
     ranking: speaker.ranking || 'Medium Priority',
-    host: speaker.host || ''
+    host: speaker.host || '',
+    mugshot_image: speaker.mugshot_image || null,
+    science_image: speaker.science_image || null
   });
+  const [mugshotPreview, setMugshotPreview] = useState(speaker.mugshot_image || null);
+  const [sciencePreview, setSciencePreview] = useState(speaker.science_image || null);
+
+  const handleMugshotChange = async (file) => {
+    if (!file) {
+      setForm(prev => ({ ...prev, mugshot_image: null }));
+      setMugshotPreview(null);
+      return;
+    }
+    try {
+      const dataUrl = await processImageFile(file, { targetWidth: 420, targetHeight: 420, quality: 0.7 });
+      setForm(prev => ({ ...prev, mugshot_image: dataUrl }));
+      setMugshotPreview(dataUrl);
+    } catch {
+      alert('Could not process mugshot image. Please try another file.');
+    }
+  };
+
+  const handleScienceChange = async (file) => {
+    if (!file) {
+      setForm(prev => ({ ...prev, science_image: null }));
+      setSciencePreview(null);
+      return;
+    }
+    try {
+      const dataUrl = await processImageFile(file, { targetWidth: 960, targetHeight: 540, quality: 0.7 });
+      setForm(prev => ({ ...prev, science_image: dataUrl }));
+      setSciencePreview(dataUrl);
+    } catch {
+      alert('Could not process science image. Please try another file.');
+    }
+  };
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -5565,11 +5809,47 @@ function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries
             {countries.map((c, idx) => c.startsWith('---') ? <option key={idx} disabled>{c}</option> : <option key={idx}>{c}</option>)}
           </select>
           <input className="border rounded px-3 py-2" value={form.area_of_expertise} onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} required />
+          <div>
+            <label className="text-sm block mb-1">Speaker URL *</label>
+            <input
+              required
+              className="w-full border rounded px-3 py-2"
+              placeholder="https://..."
+              value={form.speaker_url}
+              onChange={e => setForm({ ...form, speaker_url: e.target.value })}
+            />
+          </div>
           <select className="border rounded px-3 py-2" value={form.ranking} onChange={e => setForm({ ...form, ranking: e.target.value })}>
             <option>High Priority</option>
             <option>Medium Priority</option>
             <option>Low Priority</option>
           </select>
+          <div className="col-span-2">
+            <label className="text-sm block mb-2">Images (optional, up to 2)</label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs text-neutral-600 mb-1">Mugshot (square)</div>
+                <input type="file" accept="image/*" className="w-full" onChange={e => handleMugshotChange(e.target.files?.[0])} />
+                {mugshotPreview && <img src={mugshotPreview} alt="Mugshot preview" className="mt-2 w-full max-h-48 object-cover rounded border" />}
+                {mugshotPreview && (
+                  <button type="button" onClick={() => handleMugshotChange(null)} className="mt-2 text-xs text-red-600 hover:underline">
+                    Remove mugshot
+                  </button>
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-neutral-600 mb-1">Science explanation image (16:9)</div>
+                <input type="file" accept="image/*" className="w-full" onChange={e => handleScienceChange(e.target.files?.[0])} />
+                {sciencePreview && <img src={sciencePreview} alt="Science preview" className="mt-2 w-full max-h-48 object-cover rounded border" />}
+                {sciencePreview && (
+                  <button type="button" onClick={() => handleScienceChange(null)} className="mt-2 text-xs text-red-600 hover:underline">
+                    Remove science image
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-neutral-500 mt-2">Images are automatically center-cropped and downscaled to reduce size.</p>
+          </div>
           <select className="border rounded px-3 py-2" value={form.host} onChange={e => setForm({ ...form, host: e.target.value })} required>
             <option value="">-- Host --</option>
             {seniorFellows.map(f => <option key={f.id} value={f.full_name}>{f.full_name} ({f.role})</option>)}
