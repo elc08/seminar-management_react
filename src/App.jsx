@@ -20,8 +20,12 @@ import {
   Timestamp,
   serverTimestamp,
   setDoc,
-  deleteDoc
-} from 'firebase/firestore';
+  deleteDoc,
+  onSnapshot,
+  limit
+}
+
+from 'firebase/firestore';
 import { auth, db } from './firebase';
 import {
   BarChart,
@@ -138,6 +142,8 @@ export default function App() {
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [activitySubTab, setActivitySubTab] = useState('overview');
+  const [activityLogs, setActivityLogs] = useState([]);
 
   // Domain Data State
   const [speakers, setSpeakers] = useState([]);
@@ -152,6 +158,7 @@ export default function App() {
   const [showAddDateForm, setShowAddDateForm] = useState(false);
   const [showAddSpeakerForm, setShowAddSpeakerForm] = useState(false);
   const [showAddPastSpeakerForm, setShowAddPastSpeakerForm] = useState(false);
+  const [showAddConfirmedSpeakerForm, setShowAddConfirmedSpeakerForm] = useState(false);  // ← ADD THIS LINE
   const [showInviteUserForm, setShowInviteUserForm] = useState(false);
   const [showEditSpeakerForm, setShowEditSpeakerForm] = useState(false);
   const [showEditConfirmedForm, setShowEditConfirmedForm] = useState(false);
@@ -246,6 +253,21 @@ export default function App() {
     }
   }, []);
 
+  const loadActivityLogs = useCallback(async () => {
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, 'activity_logs'),
+          orderBy('timestamp', 'desc'),
+          limit(100)
+        )
+      );
+      setActivityLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('loadActivityLogs', err);
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     await Promise.all([
       loadSpeakers(),
@@ -254,9 +276,10 @@ export default function App() {
       loadSeniorFellows(),
       loadAllUsers(),
       loadAgendas(),
-      loadUserAvailability()
+      loadUserAvailability(),
+      loadActivityLogs()
     ]);
-  }, [loadSpeakers, loadAvailableDates, loadInvitations, loadSeniorFellows, loadAllUsers, loadAgendas, loadUserAvailability]);
+  }, [loadSpeakers, loadAvailableDates, loadInvitations, loadSeniorFellows, loadAllUsers, loadAgendas, loadUserAvailability, loadActivityLogs]);
 
 
 /* ---------------------------
@@ -307,6 +330,7 @@ export default function App() {
     }
   };
 
+  
   /* ---------------------------
      Token / Signup handling
      --------------------------- */
@@ -449,85 +473,149 @@ export default function App() {
   Speaker / Date / Invitation handlers
   --------------------------- */
   const handleAddDate = async (formData) => {
-  try {
-    const newDate = new Date(formData.date);
-    const newDateString = newDate.toISOString().split('T')[0];
-    const duplicate = availableDates.find(d => {
-      if (d.locked_by_id === 'DELETED') return false;
-      const existing = d.date?.toDate ? d.date.toDate() : new Date(d.date);
-      return existing.toISOString().split('T')[0] === newDateString;
-    });
-    if (duplicate) {
-      alert(`This date (${formatDate(duplicate.date)}) already exists.`);
+    try {
+      const newDate = new Date(formData.date);
+      const newDateString = newDate.toISOString().split('T')[0];
+  
+      const duplicate = availableDates.find(d => {
+        if (d.locked_by_id === 'DELETED') return false;
+        const existing = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        return existing.toISOString().split('T')[0] === newDateString;
+      });
+  
+      if (duplicate) {
+        alert(`This date (${formatDate(duplicate.date)}) already exists.`);
+        return;
+      }
+  
+      const actor = buildActor({ user, userRole });
+  
+      await addDocWithActivity({
+        db,
+        colPath: 'available_dates',
+        data: {
+          date: Timestamp.fromDate(newDate),
+          available: formData.type === 'available',
+          is_conflicting: formData.type === 'conflicting',
+          locked_by_id: null,
+          host: formData.host || '',
+          notes: formData.notes || '',
+          createdAt: serverTimestamp(),
+        },
+        activity: {
+          type: 'date_added',
+          ...actor,
+          targetType: 'available_date',
+          summary: `Added date: ${newDateString} (${formData.type})`,
+        },
+      });
+  
+      await loadAvailableDates();
+      setShowAddDateForm(false);
+    } catch (err) {
+      alert('Error adding date: ' + (err.message || err));
+    }
+  };
+  
+
+  const handleDeleteDate = async (dateId) => {
+    const date = availableDates.find(d => d.id === dateId);
+    if (date && date.locked_by_id && date.locked_by_id !== 'DELETED') {
+      alert('Cannot delete a date that is locked by a speaker.');
       return;
     }
-    await addDoc(collection(db, 'available_dates'), {
-      date: Timestamp.fromDate(newDate),
-      available: formData.type === 'available',
-      is_conflicting: formData.type === 'conflicting',
-      locked_by_id: null,
-      host: formData.host || '',
-      notes: formData.notes || '',
-      createdAt: serverTimestamp()
-    });
-    await loadAvailableDates();
-    setShowAddDateForm(false);
-  } catch (err) {
-    alert('Error adding date: ' + (err.message || err));
-  }
-};
-
-const handleDeleteDate = async (dateId) => {
-  const date = availableDates.find(d => d.id === dateId);
-  // Only prevent deletion if date is locked by a speaker (not just unavailable/conflicting)
-  if (date && date.locked_by_id && date.locked_by_id !== 'DELETED') {
-    alert('Cannot delete a date that is locked by a speaker.');
-    return;
-  }
-  if (!window.confirm('Are you sure you want to delete this date?')) return;
-  try {
-    await updateDoc(doc(db, 'available_dates', dateId), {
-      available: false,
-      locked_by_id: 'DELETED'
-    });
-    await loadAvailableDates();
-  } catch (err) {
-    alert('Error deleting date: ' + (err.message || err));
-  }
-};
+    if (!window.confirm('Are you sure you want to delete this date?')) return;
+  
+    try {
+      const actor = buildActor({ user, userRole });
+  
+      await updateDocWithActivity({
+        db,
+        docRef: doc(db, 'available_dates', dateId),
+        data: {
+          available: false,
+          locked_by_id: 'DELETED',
+        },
+        activity: {
+          type: 'date_deleted',
+          ...actor,
+          targetType: 'available_date',
+          targetId: dateId,
+          summary: `Deleted date entry: ${dateId}`,
+        },
+      });
+  
+      await loadAvailableDates();
+    } catch (err) {
+      alert('Error deleting date: ' + (err.message || err));
+    }
+  };
+  
+  /* ---------------------------
+     Activity Logger Helper
+     --------------------------- */
+  const logActivity = async (actionType, description, metadata = {}) => {
+    try {
+      await addDoc(collection(db, 'activity_logs'), {
+        user_id: user.uid,
+        action_type: actionType,
+        description: description,
+        metadata: metadata,
+        timestamp: serverTimestamp()
+      });
+      // Optionally reload activity logs if needed
+      await loadActivityLogs();
+    } catch (err) {
+      console.error('Error logging activity:', err);
+      // Don't block the main action if logging fails
+    }
+  };
 
 const handleAddSpeaker = async (formData) => {
   try {
-    // Accept both keys to avoid mismatches
     const rawUrl = (formData?.speaker_url ?? formData?.url ?? "").trim();
-
     if (!rawUrl) {
       alert("URL is compulsory.");
       return;
     }
 
     const token = generateToken();
-
-    const cleanData = {
-      ...formData,
-      speaker_url: rawUrl, // store canonically as speaker_url
-    };
-
-    // Optional: remove legacy url key so you don't end up with both
+    const cleanData = { ...formData, speaker_url: rawUrl };
     delete cleanData.url;
 
-    await addDoc(collection(db, "speakers"), {
-      ...cleanData,
-      status: "Proposed",
-      proposed_by_id: user.uid,
-      proposed_by_name: userRole.full_name,
-      access_token: token,
-      actions: [],
-      votes: [],
-      createdAt: serverTimestamp(),
+    const actor = buildActor({ user, userRole });
+
+    await addDocWithActivity({
+      db,
+      colPath: "speakers",
+      data: {
+        ...cleanData,
+        status: "Proposed",
+        proposed_by_id: user.uid,
+        proposed_by_name: userRole.full_name,
+        access_token: token,
+        actions: [],
+        votes: [],
+        createdAt: serverTimestamp(),
+      },
+      activity: {
+        type: "speaker_proposed",
+        ...actor,
+        targetType: "speaker",
+        // targetId will be filled with docRef.id automatically
+        summary: `Proposed speaker: ${cleanData.full_name || '(no name)'}`,
+      },
     });
 
     await loadSpeakers();
+    
+    // Log the activity
+    await logActivity(
+      'speaker_proposed',
+      `Proposed speaker: ${cleanData.name}`,
+      { speaker_name: cleanData.name, speaker_affiliation: cleanData.affiliation }
+    );
+    
     setShowAddSpeakerForm(false);
   } catch (err) {
     alert("Error adding speaker: " + (err.message || err));
@@ -555,6 +643,74 @@ const handleAddSpeaker = async (formData) => {
     }
   };
 
+
+  const handleAddConfirmedSpeaker = async (formData) => {
+    try {
+      const token = generateToken();
+      const actor = buildActor({ user, userRole });
+      
+      // Find the date document that matches the selected date
+      const selectedDate = new Date(formData.assigned_date);
+      selectedDate.setHours(0, 0, 0, 0);
+      
+      const matchingDateDoc = availableDates.find(d => {
+        const dateVal = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+        dateVal.setHours(0, 0, 0, 0);
+        return dateVal.getTime() === selectedDate.getTime();
+      });
+      
+      // Create the speaker document with activity logging
+      const speakerDocRef = await addDocWithActivity({
+        db,
+        colPath: 'speakers',
+        data: {
+          ...formData,
+          status: 'Accepted',
+          proposed_by_id: user.uid,
+          proposed_by_name: userRole.full_name,
+          assigned_date: Timestamp.fromDate(new Date(formData.assigned_date)),
+          access_token: token,
+          actions: [],
+          votes: [],
+          createdAt: serverTimestamp()
+        },
+        activity: {
+          type: 'speaker_confirmed',
+          ...actor,
+          targetType: 'speaker',
+          summary: `Manually added confirmed speaker: ${formData.full_name}`,
+        }
+      });
+      
+      // Lock the date if it exists in available_dates
+      if (matchingDateDoc) {
+        await updateDoc(doc(db, 'available_dates', matchingDateDoc.id), {
+          available: false,
+          locked_by_id: speakerDocRef.id,
+          locked_by_name: formData.full_name,
+          locked_at: serverTimestamp()
+        });
+      }
+      
+      // Create an agenda for this speaker
+      await addDoc(collection(db, 'agendas'), {
+        speaker_id: speakerDocRef.id,
+        speaker_name: formData.full_name,
+        seminar_date: Timestamp.fromDate(new Date(formData.assigned_date)),
+        meetings: [],
+        createdAt: serverTimestamp()
+      });
+  
+      await loadSpeakers();
+      await loadAgendas();
+      await loadAvailableDates();
+      setShowAddConfirmedSpeakerForm(false);
+      alert('Confirmed speaker added successfully!');
+    } catch (err) {
+      console.error('Error details:', err);
+      alert('Error adding confirmed speaker: ' + (err.message || err));
+    }
+  };
   const handleDeleteSpeaker = async (speakerId) => {
     if (!window.confirm('Are you sure you want to delete this speaker proposal?')) return;
     try {
@@ -571,27 +727,41 @@ const handleAddSpeaker = async (formData) => {
       const sp = speakers.find(s => s.id === speakerId);
       const token = sp.access_token || generateToken();
       const actions = sp.actions || [];
+  
       actions.push({
         type: 'invitation_drafted',
         timestamp: new Date().toISOString(),
         completed: false,
-        user: userRole.full_name
+        user: userRole.full_name,
       });
-      await updateDoc(doc(db, 'speakers', speakerId), {
-        status: 'Invited',
-        access_token: token,
-        invitation_sent_date: serverTimestamp(),
-        response_deadline: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)),
-        actions
+  
+      const actor = buildActor({ user, userRole });
+  
+      await updateDocWithActivity({
+        db,
+        docRef: doc(db, 'speakers', speakerId),
+        data: {
+          status: 'Invited',
+          access_token: token,
+          invitation_sent_date: serverTimestamp(),
+          response_deadline: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)),
+          actions,
+        },
+        activity: {
+          type: 'speaker_invited',
+          ...actor,
+          targetType: 'speaker',
+          targetId: speakerId,
+          summary: `Invited speaker: ${sp?.full_name || speakerId}`,
+        },
       });
+  
       await loadSpeakers();
-      const updated = { ...sp, status: 'Invited', access_token: token, actions };
-      setSidebarSpeaker(updated);
-      setShowSidebar(true);
     } catch (err) {
-      alert('Error accepting speaker: ' + (err.message || err));
+      alert('Error inviting speaker: ' + (err.message || err));
     }
   };
+  
 
   const handleResendInvitation = async (speaker) => {
     try {
@@ -611,12 +781,28 @@ const handleAddSpeaker = async (formData) => {
   const handleRejectSpeaker = async (speakerId) => {
     if (!window.confirm('Are you sure you want to reject this speaker?')) return;
     try {
-      await updateDoc(doc(db, 'speakers', speakerId), { status: 'Declined' });
+      const sp = speakers.find(s => s.id === speakerId);
+      const actor = buildActor({ user, userRole });
+  
+      await updateDocWithActivity({
+        db,
+        docRef: doc(db, 'speakers', speakerId),
+        data: { status: 'Declined' },
+        activity: {
+          type: 'speaker_declined_by_organizer',
+          ...actor,
+          targetType: 'speaker',
+          targetId: speakerId,
+          summary: `Declined speaker: ${sp?.full_name || speakerId}`,
+        },
+      });
+  
       await loadSpeakers();
     } catch (err) {
       alert('Error rejecting speaker: ' + (err.message || err));
     }
   };
+  
 
   const handleVoteSpeaker = async (speakerId, action) => {
     try {
@@ -624,6 +810,8 @@ const handleAddSpeaker = async (formData) => {
       const sp = speakers.find(s => s.id === speakerId);
       let votes = sp.votes || [];
       const existing = votes.findIndex(v => v.user_id === user.uid);
+      const wasVoted = existing >= 0;
+      
       if (action === 'upvote') {
         if (existing >= 0) {
           votes.splice(existing, 1);
@@ -633,6 +821,13 @@ const handleAddSpeaker = async (formData) => {
       }
       await updateDoc(doc(db, 'speakers', speakerId), { votes });
       await loadSpeakers();
+      
+      // Log the voting activity
+      await logActivity(
+        wasVoted ? 'vote_removed' : 'vote_submitted',
+        `${wasVoted ? 'Removed vote from' : 'Voted for'} speaker: ${sp.name}`,
+        { speaker_id: speakerId, speaker_name: sp.name }
+      );
     } catch (err) {
       alert('Error voting on speaker: ' + (err.message || err));
     }
@@ -684,13 +879,24 @@ const handleAddSpeaker = async (formData) => {
         return;
       }
   
-      const cleanData = {
-        ...formData,
-        speaker_url: rawUrl,
-      };
+      const cleanData = { ...formData, speaker_url: rawUrl };
       delete cleanData.url;
   
-      await updateDoc(doc(db, "speakers", editingSpeaker.id), cleanData);
+      const actor = buildActor({ user, userRole });
+  
+      await updateDocWithActivity({
+        db,
+        docRef: doc(db, "speakers", editingSpeaker.id),
+        data: cleanData,
+        activity: {
+          type: "speaker_edited",
+          ...actor,
+          targetType: "speaker",
+          targetId: editingSpeaker.id,
+          summary: `Edited speaker: ${editingSpeaker.full_name || editingSpeaker.id}`,
+        },
+      });
+  
       await loadSpeakers();
       setShowEditSpeakerForm(false);
       setEditingSpeaker(null);
@@ -698,6 +904,7 @@ const handleAddSpeaker = async (formData) => {
       alert("Error updating speaker: " + (err.message || err));
     }
   };
+  
   
 
   const handleEditConfirmedSpeaker = async (formData) => {
@@ -1036,32 +1243,56 @@ const handleAddSpeaker = async (formData) => {
 /* ---------------------------
     User availability
     --------------------------- */
-    const handleUpdateAvailability = async (dateId, available, conflictNote) => {
-    try {
-      const existing = userAvailability.find(ua => ua.user_id === user.uid && ua.date_id === dateId);
-      if (existing) {
-        await updateDoc(doc(db, 'user_availability', existing.id), { 
-          available, 
-          conflictNote: conflictNote || null,
-          updatedAt: serverTimestamp() 
-        });
-      } else {
-        if (!available || conflictNote) {
+    const handleUpdateAvailability = async (dateId, isAvailable, conflictNote = '') => {
+      try {
+        if (!user || !userRole) {
+          alert('User information not found');
+          return;
+        }
+    
+        // Find if user already has availability record for this date
+        const existingAvailability = userAvailability.find(
+          ua => ua.user_id === userRole.id && ua.date_id === dateId
+        );
+    
+        if (existingAvailability) {
+          // Update existing record
+          await updateDoc(doc(db, 'user_availability', existingAvailability.id), {
+            available: isAvailable,
+            conflict_note: conflictNote,
+            updatedAt: serverTimestamp()
+          });
+        } else {
+          // Create new record
           await addDoc(collection(db, 'user_availability'), {
-            user_id: user.uid,
+            user_id: userRole.id,
             user_name: userRole.full_name,
             date_id: dateId,
-            available: available,
-            conflictNote: conflictNote || null,
-            createdAt: serverTimestamp()
+            available: isAvailable,
+            conflict_note: conflictNote,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
           });
         }
+    
+        // Reload availability data
+        await loadUserAvailability();
+        
+        // Log the activity
+        const dateDoc = availableDates.find(d => d.id === dateId);
+        const dateStr = dateDoc ? formatDate(dateDoc.date) : dateId;
+        await logActivity(
+          'availability_updated',
+          `Updated availability for ${dateStr}: ${isAvailable ? 'Available' : 'Not Available'}`,
+          { date_id: dateId, available: isAvailable, has_conflict_note: !!conflictNote }
+        );
+        
+      } catch (err) {
+        console.error('Error updating availability:', err);
+        alert('Error updating availability: ' + (err.message || err));
       }
-      await loadUserAvailability();
-    } catch (err) {
-      alert('Error updating availability: ' + (err.message || err));
-    }
-  };
+    };
+    
 
   /* ---------------------------
      Agenda / Meetings
@@ -1177,6 +1408,52 @@ const handleAddSpeaker = async (formData) => {
     }
   };
 
+
+/* ============================================================
+   Centralized Activity Logging (Activity Log)
+   - Adds a Firestore doc to `activity_log` for meaningful mutations
+   - Wraps addDoc / updateDoc / deleteDoc so handlers stay clean
+   ============================================================ */
+
+// Builds the "actor" fields consistently from your existing userRole + user
+const buildActor = ({ user, userRole }) => ({
+  actorId: userRole?.id || user?.uid || null,
+  actorName: userRole?.full_name || user?.email || 'Unknown',
+  actorEmail: userRole?.email || user?.email || null,
+});
+
+// Fire-and-forget logging. Never block the main app flow on logging.
+const logActivitySafe = async ({ db, entry }) => {
+  try {
+    await addDoc(collection(db, 'activity_log'), {
+      ...entry,
+      createdAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn('Activity log write failed (ignored):', err);
+  }
+};
+
+// Wrapper: addDoc + activity log (returns docRef)
+const addDocWithActivity = async ({ db, colPath, data, activity }) => {
+  const ref = await addDoc(collection(db, colPath), data);
+  await logActivitySafe({
+    db,
+    entry: {
+      ...activity,
+      targetId: activity?.targetId || ref.id,
+    },
+  });
+  return ref;
+};
+
+// Wrapper: updateDoc + activity log
+const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
+  await updateDoc(docRef, data);
+  await logActivitySafe({ db, entry: activity });
+};
+
+
   /* ---------------------------
      Small UX helpers
      --------------------------- */
@@ -1260,7 +1537,7 @@ const handleAddSpeaker = async (formData) => {
       </header>
 
       {/* Main container with max-width */}
-      <div className="flex max-w-[1600px] mx-auto">
+      <div className="flex max-w-[1600px] mx-auto h-[calc(100vh-64px)] overflow-hidden">
         {/* Left nav - REDUCED */}
         <nav className="w-56 bg-white border-r p-4 space-y-2 min-h-screen">
         <NavButton label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
@@ -1274,6 +1551,7 @@ const handleAddSpeaker = async (formData) => {
               <NavButton label="Propose Speaker" active={activeTab === 'propose'} onClick={() => setActiveTab('propose')} />
               <NavButton label="Manage Users" active={activeTab === 'users'} onClick={() => setActiveTab('users')} />
               <NavButton label="User Invitations" active={activeTab === 'invitations'} onClick={() => setActiveTab('invitations')} />
+              <NavButton label="Fellows Activity" active={activeTab === 'fellows-activity'} onClick={() => setActiveTab('fellows-activity')} />
             </>
           )}
           {userRole?.role === 'Senior Fellow' && (
@@ -1283,7 +1561,7 @@ const handleAddSpeaker = async (formData) => {
         </nav>
 
         {/* Main content - with flex-1 but constrained by parent max-width */}
-        <main className="flex-1 p-6 space-y-6 overflow-x-hidden">
+        <main className="flex-1 p-6 space-y-6 overflow-y-auto">
         {activeTab === 'dashboard' && (
           <DashboardView
             userRole={userRole}
@@ -1307,6 +1585,7 @@ const handleAddSpeaker = async (formData) => {
             formatDate={formatDate}
             allUsers={allUsers}   
             userAvailability={userAvailability}
+            onAddConfirmedSpeaker={() => setShowAddConfirmedSpeakerForm(true)}
           />
         )}
 
@@ -1372,24 +1651,40 @@ const handleAddSpeaker = async (formData) => {
             />
           )}
 
+
+          {activeTab === 'fellows-activity' && userRole?.role === 'Organizer' && (
+          <FellowsActivityView
+            dates={availableDates.filter(d => d.locked_by_id !== 'DELETED')}
+            userAvailability={userAvailability}
+            seniorFellows={seniorFellows}
+            speakers={speakers}
+            activityLogs={activityLogs}
+            formatDate={formatDate}
+            allUsers={allUsers}
+          />
+        )}
           {activeTab === 'profile' && (
             <ProfileView userRole={userRole} onEditProfile={() => setShowEditProfileForm(true)} />
           )}
         </main>
 
         {/* Right panel - with full height */}
-        <aside className="w-[425px] border-l bg-white p-4 min-h-screen">
-        {showSidebar && sidebarSpeaker && (
-          <ActionsSidebar
-            speaker={sidebarSpeaker}
-            onClose={() => { setShowSidebar(false); setSidebarSpeaker(null); }}
-            onUpdateAction={handleUpdateAction}
-            onAddAction={handleAddManualAction}
-            currentUser={userRole}
-            formatDate={formatDate}
-            allUsers={allUsers}
-          />
-        )}
+        <aside className="w-[425px] border-l bg-white p-4 overflow-y-auto space-y-4">
+          {activeTab === "dashboard" && (
+            <LockedSpeakersMiniCalendar dates={availableDates} speakers={speakers} />
+          )}
+
+          {showSidebar && sidebarSpeaker && (
+            <ActionsSidebar
+              speaker={sidebarSpeaker}
+              onClose={() => { setShowSidebar(false); setSidebarSpeaker(null); }}
+              onUpdateAction={handleUpdateAction}
+              onAddAction={handleAddManualAction}
+              currentUser={userRole}
+              formatDate={formatDate}
+              allUsers={allUsers}
+            />
+          )}
 
           {showPosterSidebar && posterSpeaker && (
             <PosterSidebar
@@ -1405,9 +1700,32 @@ const handleAddSpeaker = async (formData) => {
       {/* Modals & Forms */}
       {showAddDateForm && <AddDateForm onSubmit={handleAddDate} onCancel={() => setShowAddDateForm(false)} existingDates={availableDates} formatDate={formatDate} />}
 
-      {showAddSpeakerForm && <AddSpeakerForm onSubmit={handleAddSpeaker} onCancel={() => setShowAddSpeakerForm(false)} seniorFellows={seniorFellows} currentUser={userRole} countries={COUNTRIES} availableDates={availableDates} userAvailability={userAvailability} formatDate={formatDate} />}
+      {showAddSpeakerForm && (
+        <AddSpeakerForm
+          onSubmit={handleAddSpeaker}
+          onCancel={() => setShowAddSpeakerForm(false)}
+          seniorFellows={seniorFellows}
+          currentUser={userRole}
+          countries={COUNTRIES}
+          availableDates={availableDates}
+          userAvailability={userAvailability}
+          formatDate={formatDate}
+          speakers={speakers}  // ✅ needed for search / duplicate checks
+        />
+      )}
 
       {showAddPastSpeakerForm && <AddPastSpeakerForm onSubmit={handleAddPastSpeaker} onCancel={() => setShowAddPastSpeakerForm(false)} seniorFellows={seniorFellows} countries={COUNTRIES} />}
+      
+      {showAddConfirmedSpeakerForm && (
+        <AddConfirmedSpeakerForm
+          onSubmit={handleAddConfirmedSpeaker}
+          onCancel={() => setShowAddConfirmedSpeakerForm(false)}
+          seniorFellows={seniorFellows}
+          countries={COUNTRIES}
+          availableDates={availableDates}
+          formatDate={formatDate}
+        />
+      )}
 
       {showEditSpeakerForm && editingSpeaker && <EditSpeakerForm speaker={editingSpeaker} onSubmit={handleEditSpeaker} onCancel={() => { setShowEditSpeakerForm(false); setEditingSpeaker(null); }} seniorFellows={seniorFellows} countries={COUNTRIES} />}
 
@@ -1805,8 +2123,8 @@ function SignupView({ invitation, onSignup }) {
    --------------------- */
    function SpeakerAccessView({ speaker, availableDates, userAvailability, pastSpeakers, onAccept, onDecline, formatDate }) {
     const [selectedDateId, setSelectedDateId] = useState('');
-    const [talkTitle, setTalkTitle] = useState(speaker.talk_title || '(TBC)');
-    const [talkAbstract, setTalkAbstract] = useState(speaker.talk_abstract || '(TBC)');
+    const [talkTitle, setTalkTitle] = useState(speaker.talk_title || '');
+    const [talkAbstract, setTalkAbstract] = useState(speaker.talk_abstract || '');
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [confirmationType, setConfirmationType] = useState('');
     const [showStatistics, setShowStatistics] = useState(false);
@@ -1918,6 +2236,13 @@ function SignupView({ invitation, onSignup }) {
     const selectedDate = availableDates.find(d => d.id === selectedDateId);
   
     const handleAccept = () => {
+      const trimmedTitle = talkTitle.trim();
+
+      if (!trimmedTitle) {
+        alert("Please provide a talk title before submitting.");
+        return;
+      }
+
       if (!selectedDateId) {
         alert('Please select a date');
         return;
@@ -1991,7 +2316,7 @@ function SignupView({ invitation, onSignup }) {
               The Barcelona Collaboratorium Team
             </p>
           </div>
-  
+      
           {/* Talk Details */}
           <div className="mb-8">
             <h2 className="text-xl font-bold mb-4">Talk Details</h2>
@@ -2000,10 +2325,11 @@ function SignupView({ invitation, onSignup }) {
               <div>
                 <label className="block text-sm font-medium mb-2">Talk Title</label>
                 <input 
+                  required
                   className="w-full border rounded-lg px-4 py-2" 
                   value={talkTitle} 
                   onChange={(e) => setTalkTitle(e.target.value)}
-                  placeholder="Enter your talk title or leave as (TBC)"
+                  placeholder="Enter talk title (can be updated later)"
                 />
               </div>
   
@@ -2270,536 +2596,612 @@ function SignupView({ invitation, onSignup }) {
    DashboardView
    (Simplified but includes lists, actions, and charts)
    --------------------- */
-   function DashboardView({
+
+function DashboardView({
     userRole, speakers, availableDates,
     upcomingLunchReminders,
     onAcceptSpeaker, onRejectSpeaker, onResendInvitation, onEditSpeaker,
     onEditConfirmed, onViewActions, onViewAgenda, onGeneratePoster, onDeleteInvited,
     onVoteSpeaker, onMarkLunchBooked, currentUser, getRankingColor, getStatusColor, formatDate,
-    allUsers, userAvailability
+    allUsers, userAvailability, onAddConfirmedSpeaker
   }) {
-    const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
-    const [dismissedLunchReminders, setDismissedLunchReminders] = useState(new Set());
-    const [collapsedSpeakers, setCollapsedSpeakers] = useState(new Set());
-    const [viewMode, setViewMode] = useState('collapsed'); // 'expanded' or 'collapsed'
-  
-    // Initialize all speakers as collapsed
-    useEffect(() => {
-      const proposedSpeakers = speakers.filter(s => s.status === 'Proposed');
-      if (viewMode === 'collapsed') {
-        setCollapsedSpeakers(new Set(proposedSpeakers.map(s => s.id)));
-      } else {
-        setCollapsedSpeakers(new Set());
-      }
-    }, [viewMode, speakers]);
-  
-    const toggleSpeaker = (speakerId) => {
-      setCollapsedSpeakers(prev => {
-        const newSet = new Set(prev);
-        if (newSet.has(speakerId)) {
-          newSet.delete(speakerId);
-        } else {
-          newSet.add(speakerId);
-        }
-        return newSet;
-      });
-    };
-  
-    const getRecentResponses = () => {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      
-      return speakers.filter(speaker => {
+  const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
+  const [dismissedLunchReminders, setDismissedLunchReminders] = useState(new Set());
+  const [collapsedSpeakers, setCollapsedSpeakers] = useState(new Set());
+  const [viewMode, setViewMode] = useState('collapsed'); // 'expanded' or 'collapsed'
+
+  // NEW: proposed speakers sort mode (default = votes)
+  const [proposedSortMode, setProposedSortMode] = useState('votes'); // 'votes' | 'date'
+
+  // Initialize all speakers as collapsed
+  useEffect(() => {
+    const proposedOnly = speakers.filter(s => s.status === 'Proposed');
+    if (viewMode === 'collapsed') {
+      setCollapsedSpeakers(new Set(proposedOnly.map(s => s.id)));
+    } else {
+      setCollapsedSpeakers(new Set());
+    }
+  }, [viewMode, speakers]);
+
+  const toggleSpeaker = (speakerId) => {
+    setCollapsedSpeakers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(speakerId)) newSet.delete(speakerId);
+      else newSet.add(speakerId);
+      return newSet;
+    });
+  };
+
+  const getRecentResponses = () => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    return speakers
+      .filter(speaker => {
         if (!speaker.actions || speaker.actions.length === 0) return false;
         const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
         if (!responseAction) return false;
         const responseDate = new Date(responseAction.timestamp);
         return responseDate >= sevenDaysAgo && !dismissedAlerts.has(speaker.id);
-      }).sort((a, b) => {
+      })
+      .sort((a, b) => {
         const aAction = a.actions.find(act => act.type === 'speaker_responded');
         const bAction = b.actions.find(act => act.type === 'speaker_responded');
         return new Date(bAction.timestamp) - new Date(aAction.timestamp);
       });
-    };
-  
-    const recentResponses = getRecentResponses();
-    
-    // Sort proposed speakers by votes (descending) then by priority
-    const proposedSpeakers = speakers
-      .filter(s => s.status === 'Proposed')
-      .sort((a, b) => {
-        const aVotes = (a.votes || []).length;
-        const bVotes = (b.votes || []).length;
-        
-        // First sort by votes (descending)
-        if (bVotes !== aVotes) {
-          return bVotes - aVotes;
-        }
-        
-        // If votes are equal, sort by priority
-        const priorityOrder = { 'High Priority': 0, 'Medium Priority': 1, 'Low Priority': 2 };
-        return (priorityOrder[a.ranking] || 1) - (priorityOrder[b.ranking] || 1);
-      });
-    
-    const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const upcomingSpeakers = speakers.filter(s => {
-      if (s.status !== 'Accepted') return false;
-      if (!s.assigned_date) return false;
-      const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
-      return speakerDate >= today;
-    });
-  
-    const overdueSpeakers = invitedSpeakers.filter(s => {
-      if (!s.response_deadline) return false;
-      const deadline = safeToDate(s.response_deadline);
-      return deadline < new Date();
-    });
-  
-    const canEditSpeaker = (speaker) => {
-      if (currentUser.role === 'Organizer') return true;
-      return speaker.host === currentUser.full_name;
-    };
+  };
 
-    // Proposed speaker editing: allow Organizers and Senior Fellows
-    const canEditProposedSpeaker = () => {
-      return currentUser.role === 'Organizer' || currentUser.role === 'Senior Fellow';
-    };
-  
-    const visibleLunchReminders = upcomingLunchReminders 
-      ? upcomingLunchReminders.filter(s => !dismissedLunchReminders.has(s.id))
-      : [];
-  
-    return (
-      <div className="space-y-6">
-        {/* Lunch Reservation Reminders */}
-        {visibleLunchReminders.length > 0 && (
-          <div className="bg-amber-50 border-l-4 border-amber-500 rounded-lg shadow-md p-5">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-3xl">🍽️</span>
-                  <h4 className="font-bold text-amber-900 text-lg">Lunch Reservation Reminders</h4>
-                </div>
-                <div className="space-y-3">
-                  {visibleLunchReminders.map(speaker => (
-                    <div key={speaker.id} className="flex items-start justify-between bg-white rounded-lg p-3 border border-amber-200">
-                      <div className="flex-1">
-                        <div className="font-semibold text-amber-900">{speaker.full_name}</div>
-                        <div className="text-sm text-amber-700 mt-1">
-                          Seminar in one week: <strong>{formatDate(speaker.assigned_date)}</strong>
-                        </div>
-                        <div className="text-xs text-amber-600 mt-1">
-                          📍 Don't forget to make lunch reservations!
-                        </div>
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id={`lunch-booked-${speaker.id}`}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                onMarkLunchBooked(speaker.id);
-                              }
-                            }}
-                            className="w-4 h-4 text-green-600 border-amber-300 rounded focus:ring-amber-500"
-                          />
-                          <label htmlFor={`lunch-booked-${speaker.id}`} className="text-sm text-amber-800 cursor-pointer">
-                            Mark reservation as booked (disables alert for all users)
-                          </label>
-                        </div>
+  const recentResponses = getRecentResponses();
+
+  // Helper: proposal submission date (falls back safely)
+  const getProposalDateMs = (s) => {
+    const d = safeToDate(s?.createdAt);
+    return d ? d.getTime() : 0;
+  };
+
+  // UPDATED: Proposed speakers sorting
+  // - default: votes desc, then priority
+  // - optional: proposal date desc (newest first), then votes desc, then priority
+  const proposedSpeakers = speakers
+    .filter(s => s.status === 'Proposed')
+    .sort((a, b) => {
+      const aVotes = (a.votes || []).length;
+      const bVotes = (b.votes || []).length;
+
+      const priorityOrder = { 'High Priority': 0, 'Medium Priority': 1, 'Low Priority': 2 };
+
+      if (proposedSortMode === 'date') {
+        const aDate = getProposalDateMs(a);
+        const bDate = getProposalDateMs(b);
+
+        // Newest first
+        if (bDate !== aDate) return bDate - aDate;
+
+        // Tie-breaker: votes desc
+        if (bVotes !== aVotes) return bVotes - aVotes;
+
+        // Then priority
+        return (priorityOrder[a.ranking] ?? 1) - (priorityOrder[b.ranking] ?? 1);
+      }
+
+      // Default: votes desc
+      if (bVotes !== aVotes) return bVotes - aVotes;
+
+      // Then priority
+      return (priorityOrder[a.ranking] ?? 1) - (priorityOrder[b.ranking] ?? 1);
+    });
+
+  const invitedSpeakers = speakers.filter(s => s.status === 'Invited');
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const upcomingSpeakers = speakers.filter(s => {
+    if (s.status !== 'Accepted') return false;
+    if (!s.assigned_date) return false;
+    const speakerDate = s.assigned_date.toDate ? s.assigned_date.toDate() : new Date(s.assigned_date);
+    return speakerDate >= today;
+  }).sort((a, b) => {
+    // Sort by assigned_date (earliest first)
+    const dateA = a.assigned_date?.toDate ? a.assigned_date.toDate() : new Date(a.assigned_date);
+    const dateB = b.assigned_date?.toDate ? b.assigned_date.toDate() : new Date(b.assigned_date);
+    return dateA - dateB;
+  });
+
+  const overdueSpeakers = invitedSpeakers.filter(s => {
+    if (!s.response_deadline) return false;
+    const deadline = safeToDate(s.response_deadline);
+    return deadline < new Date();
+  });
+
+  const canEditSpeaker = (speaker) => {
+    if (currentUser.role === 'Organizer') return true;
+    return speaker.host === currentUser.full_name;
+  };
+
+  // Proposed speaker editing: allow Organizers and Senior Fellows
+  const canEditProposedSpeaker = () => {
+    return currentUser.role === 'Organizer' || currentUser.role === 'Senior Fellow';
+  };
+
+  const visibleLunchReminders = upcomingLunchReminders
+    ? upcomingLunchReminders.filter(s => !dismissedLunchReminders.has(s.id))
+    : [];
+
+  return (
+    <div className="space-y-6">
+      {/* Lunch Reservation Reminders */}
+      {visibleLunchReminders.length > 0 && (
+        <div className="bg-amber-50 border-l-4 border-amber-500 rounded-lg shadow-md p-5">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-3xl">🍽️</span>
+                <h4 className="font-bold text-amber-900 text-lg">Lunch Reservation Reminders</h4>
+              </div>
+              <div className="space-y-3">
+                {visibleLunchReminders.map(speaker => (
+                  <div key={speaker.id} className="flex items-start justify-between bg-white rounded-lg p-3 border border-amber-200">
+                    <div className="flex-1">
+                      <div className="font-semibold text-amber-900">{speaker.full_name}</div>
+                      <div className="text-sm text-amber-700 mt-1">
+                        Seminar in one week: <strong>{formatDate(speaker.assigned_date)}</strong>
                       </div>
-                      <button
-                        onClick={() => setDismissedLunchReminders(prev => new Set([...prev, speaker.id]))}
-                        className="text-amber-500 hover:text-amber-700 ml-2"
-                        title="Dismiss"
-                      >
-                        <X size={18} />
-                      </button>
+                      <div className="text-xs text-amber-600 mt-1">
+                        📍 Don't forget to make lunch reservations!
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id={`lunch-booked-${speaker.id}`}
+                          onChange={(e) => {
+                            if (e.target.checked) onMarkLunchBooked(speaker.id);
+                          }}
+                          className="w-4 h-4 text-green-600 border-amber-300 rounded focus:ring-amber-500"
+                        />
+                        <label htmlFor={`lunch-booked-${speaker.id}`} className="text-sm text-amber-800 cursor-pointer">
+                          Mark reservation as booked (disables alert for all users)
+                        </label>
+                      </div>
                     </div>
-                  ))}
-                </div>
+                    <button
+                      onClick={() => setDismissedLunchReminders(prev => new Set([...prev, speaker.id]))}
+                      className="text-amber-500 hover:text-amber-700 ml-2"
+                      title="Dismiss"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
-        )}
-  
-        {/* Overview Stats */}
-        <div className="grid grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm text-neutral-500 font-medium">Proposed</div>
-            <div className="text-3xl font-bold text-primary mt-2">{proposedSpeakers.length}</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm text-neutral-500 font-medium">Invited</div>
-            <div className="text-3xl font-bold text-primary mt-2">{invitedSpeakers.length}</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm text-neutral-500 font-medium">Upcoming</div>
-            <div className="text-3xl font-bold text-primary mt-2">{upcomingSpeakers.length}</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
-            <div className="text-sm text-red-600 font-semibold">Overdue</div>
-            <div className="text-3xl font-bold text-red-600 mt-2">{overdueSpeakers.length}</div>
+        </div>
+      )}
+
+      {/* Overview Stats */}
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-neutral-500 font-medium">Proposed</div>
+          <div className="text-3xl font-bold text-primary mt-2">{proposedSpeakers.length}</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-neutral-500 font-medium">Invited</div>
+          <div className="text-3xl font-bold text-primary mt-2">{invitedSpeakers.length}</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-neutral-500 font-medium">Upcoming</div>
+          <div className="text-3xl font-bold text-primary mt-2">{upcomingSpeakers.length}</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
+          <div className="text-sm text-red-600 font-semibold">Overdue</div>
+          <div className="text-3xl font-bold text-red-600 mt-2">{overdueSpeakers.length}</div>
+        </div>
+      </div>
+
+      {/* Proposed Speakers - with collapse functionality */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-neutral-800">
+            Proposed Speakers Awaiting Review ({proposedSpeakers.length})
+          </h3>
+
+          <div className="flex gap-2 flex-wrap justify-end">
+            {/* sort dropdown (default = votes) */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-600">Sort by</span>
+              <select
+                value={proposedSortMode}
+                onChange={(e) => setProposedSortMode(e.target.value)}
+                className="border rounded px-2 py-1 text-sm bg-white"
+                title="Sort proposed speakers"
+              >
+                <option value="votes">Votes (then priority)</option>
+                <option value="date">Proposal submission date (newest first)</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => setViewMode('expanded')}
+              className={`px-3 py-1 rounded text-sm ${viewMode === 'expanded' ? 'bg-primary text-white' : 'bg-neutral-200 text-neutral-600'}`}
+            >
+              Expand All
+            </button>
+            <button
+              onClick={() => setViewMode('collapsed')}
+              className={`px-3 py-1 rounded text-sm ${viewMode === 'collapsed' ? 'bg-primary text-white' : 'bg-neutral-200 text-neutral-600'}`}
+            >
+              Collapse All
+            </button>
           </div>
         </div>
-  
-        {/* Proposed Speakers - with collapse functionality */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl font-semibold text-neutral-800">
-              Proposed Speakers Awaiting Review ({proposedSpeakers.length})
-            </h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setViewMode('expanded')}
-                className={`px-3 py-1 rounded text-sm ${viewMode === 'expanded' ? 'bg-primary text-white' : 'bg-neutral-200 text-neutral-600'}`}
-              >
-                Expand All
-              </button>
-              <button
-                onClick={() => setViewMode('collapsed')}
-                className={`px-3 py-1 rounded text-sm ${viewMode === 'collapsed' ? 'bg-primary text-white' : 'bg-neutral-200 text-neutral-600'}`}
-              >
-                Collapse All
-              </button>
-            </div>
-          </div>
-          
-          {proposedSpeakers.length === 0 ? (
-            <p className="text-neutral-500 text-center py-8">No proposed speakers</p>
-          ) : (
-            <div className="space-y-3">
-              {proposedSpeakers.map(s => {
-                const isCollapsed = collapsedSpeakers.has(s.id);
-                const userVoted = s.votes?.some(v => v.user_id === currentUser.id);
-                const voteCount = s.votes?.length || 0;
-                
-                return (
-                  <div 
-                    key={s.id} 
-                    className="border border-neutral-200 rounded-lg hover:border-primary transition-colors cursor-pointer"
-                    onClick={() => toggleSpeaker(s.id)}
-                  >
-                    {/* Collapsed View */}
-                    {isCollapsed ? (
-                      <div className="p-3 flex items-center justify-between">
-                        <div className="flex items-center gap-4 flex-1">
-                          <span className="text-neutral-500">▶</span>
-                          <div className="font-semibold">{s.full_name}</div>
-                          <div className="text-sm text-neutral-600">{s.affiliation}</div>
-                          {s.speaker_url && (
-                            <a
-                              href={normalizeUrl(s.speaker_url)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-primary hover:underline break-all"
-                              onClick={(e) => e.stopPropagation()}
+
+        {proposedSpeakers.length === 0 ? (
+          <p className="text-neutral-500 text-center py-8">No proposed speakers</p>
+        ) : (
+          <div className="space-y-3">
+            {proposedSpeakers.map(s => {
+              const isCollapsed = collapsedSpeakers.has(s.id);
+              const userVoted = s.votes?.some(v => v.user_id === currentUser.id);
+              const voteCount = s.votes?.length || 0;
+
+              return (
+                <div
+                  key={s.id}
+                  className="border border-neutral-200 rounded-lg hover:border-primary transition-colors cursor-pointer"
+                  onClick={() => toggleSpeaker(s.id)}
+                >
+                  {/* Collapsed View */}
+                  {isCollapsed ? (
+                    <div className="p-3 flex items-center justify-between">
+                      <div className="flex items-center gap-4 flex-1">
+                        <span className="text-neutral-500">▶</span>
+                        <div className="font-semibold">{s.full_name}</div>
+                        <div className="text-sm text-neutral-600">{s.affiliation}</div>
+                        {s.speaker_url && (
+                          <a
+                            href={normalizeUrl(s.speaker_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-primary hover:underline break-all"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            Link
+                          </a>
+                        )}
+                        <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
+                          {s.ranking}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onVoteSpeaker(s.id, 'upvote');
+                          }}
+                          className={`px-3 py-1 rounded text-sm font-medium ${
+                            userVoted
+                              ? 'bg-primary text-white'
+                              : 'border border-primary text-primary hover:bg-primary hover:text-white'
+                          }`}
+                        >
+                          👍 {voteCount}
+                        </button>
+
+                        {currentUser.role === 'Organizer' && (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAcceptSpeaker(s.id);
+                              }}
+                              className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600"
                             >
-                              Link
-                            </a>
+                              Invite
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRejectSpeaker(s.id);
+                              }}
+                              className="px-3 py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600"
+                            >
+                              Decline
+                            </button>
+                          </>
+                        )}
+
+                        {canEditProposedSpeaker() && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEditSpeaker(s);
+                            }}
+                            className="px-3 py-1 bg-amber-500 text-white rounded text-sm hover:bg-amber-600"
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    /* Expanded View */
+                    <div className="p-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-neutral-500">▼</span>
+                            <div className="font-semibold text-lg text-neutral-800">{s.full_name}</div>
+                          </div>
+                          <div className="text-sm text-neutral-600 mt-1 ml-7">
+                            {s.area_of_expertise} • {s.affiliation} • {s.country}
+                          </div>
+                          {s.speaker_url && (
+                            <div className="text-sm mt-2 ml-7">
+                              <a
+                                href={normalizeUrl(s.speaker_url)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary hover:underline break-all"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {s.speaker_url}
+                              </a>
+                            </div>
                           )}
-                          <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
-                            {s.ranking}
-                          </span>
+                          <div className="text-xs text-neutral-500 mt-2 ml-7">
+                            Proposed by {s.proposed_by_name} • Host: {s.host}
+                          </div>
+                          {s.notes && (
+                            <div className="text-sm text-neutral-600 mt-2 italic bg-neutral-50 p-2 rounded ml-7">
+                              {s.notes}
+                            </div>
+                          )}
+                          <div className="mt-2 ml-7">
+                            <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
+                              {s.ranking}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+
+                        <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               onVoteSpeaker(s.id, 'upvote');
                             }}
-                            className={`px-3 py-1 rounded text-sm font-medium ${
-                              userVoted 
-                                ? 'bg-primary text-white' 
-                                : 'border border-primary text-primary hover:bg-primary hover:text-white'
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              userVoted
+                                ? 'bg-primary text-white'
+                                : 'border-2 border-primary text-primary hover:bg-primary hover:text-white'
                             }`}
                           >
                             👍 {voteCount}
                           </button>
+
                           {currentUser.role === 'Organizer' && (
-                            <>
-                              <button 
+                            <div className="flex gap-2">
+                              <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onAcceptSpeaker(s.id);
-                                }} 
-                                className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600"
+                                }}
+                                className="px-3 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
                               >
                                 Invite
                               </button>
-                              <button 
+                              <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onRejectSpeaker(s.id);
-                                }} 
-                                className="px-3 py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600"
+                                }}
+                                className="px-3 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-colors"
                               >
                                 Decline
                               </button>
-                            </>
+                            </div>
                           )}
+
                           {canEditProposedSpeaker() && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onEditSpeaker(s);
                               }}
-                              className="px-3 py-1 bg-amber-500 text-white rounded text-sm hover:bg-amber-600"
+                              className="px-3 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 transition-colors"
                             >
                               Edit
                             </button>
                           )}
                         </div>
                       </div>
-                    ) : (
-                      /* Expanded View */
-                      <div className="p-4">
-                        <div className="flex justify-between items-start">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-neutral-500">▼</span>
-                              <div className="font-semibold text-lg text-neutral-800">{s.full_name}</div>
-                            </div>
-                            <div className="text-sm text-neutral-600 mt-1 ml-7">
-                              {s.area_of_expertise} • {s.affiliation} • {s.country}
-                            </div>
-                            {s.speaker_url && (
-                              <div className="text-sm mt-2 ml-7">
-                                <a
-                                  href={normalizeUrl(s.speaker_url)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-primary hover:underline break-all"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  {s.speaker_url}
-                                </a>
-                              </div>
-                            )}
-                            <div className="text-xs text-neutral-500 mt-2 ml-7">
-                              Proposed by {s.proposed_by_name} • Host: {s.host}
-                            </div>
-                            {s.notes && (
-                              <div className="text-sm text-neutral-600 mt-2 italic bg-neutral-50 p-2 rounded ml-7">
-                                {s.notes}
-                              </div>
-                            )}
-                            <div className="mt-2 ml-7">
-                              <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
-                                {s.ranking}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onVoteSpeaker(s.id, 'upvote');
-                              }}
-                              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                userVoted 
-                                  ? 'bg-primary text-white' 
-                                  : 'border-2 border-primary text-primary hover:bg-primary hover:text-white'
-                              }`}
-                            >
-                              👍 {voteCount}
-                            </button>
-                            {currentUser.role === 'Organizer' && (
-                              <div className="flex gap-2">
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onAcceptSpeaker(s.id);
-                                  }} 
-                                  className="px-3 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
-                                >
-                                  Invite
-                                </button>
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onRejectSpeaker(s.id);
-                                  }} 
-                                  className="px-3 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-colors"
-                                >
-                                  Decline
-                                </button>
-                              </div>
-                            )}
-                            {canEditProposedSpeaker() && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onEditSpeaker(s);
-                                }}
-                                className="px-3 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 transition-colors"
-                              >
-                                Edit
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-  
-        {/* Invited Speakers */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-xl font-semibold mb-4 text-neutral-800">
-            Invited Speakers Awaiting Response ({invitedSpeakers.length})
-          </h3>
-          <InvitedList
-            speakers={invitedSpeakers}
-            onResendInvitation={onResendInvitation}
-            onDeleteInvited={onDeleteInvited}
-            onViewAgenda={onViewAgenda}
-            formatDate={formatDate}
-            canEdit={(s) => canEditSpeaker(s)}
-            currentUserRole={currentUser.role}
-            allUsers={allUsers}
-            userAvailability={userAvailability}
-            availableDates={availableDates}
-          />
-        </div>
-  
-        {/* Confirmed Upcoming Speakers - with travel arrangements highlighting */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-xl font-semibold mb-4 text-neutral-800">
-            Confirmed Upcoming Speakers ({upcomingSpeakers.length})
-          </h3>
-          {upcomingSpeakers.length === 0 ? (
-            <p className="text-neutral-500 text-center py-8">No upcoming confirmed speakers</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b-2 border-neutral-200">
-                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Name</th>
-                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Title</th>
-                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Date</th>
-                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Host</th>
-                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Travel</th>
-                    <th className="text-left py-3 px-4 font-semibold text-neutral-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {upcomingSpeakers.map(s => {
-                    const hasTravelArrangements = s.actions?.some(a => 
-                      a.type === 'travel_arrangements' && a.completed
-                    );
-                    
-                    return (
-                      <tr key={s.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${!hasTravelArrangements ? 'bg-amber-50' : ''}`}>
-                        <td className="py-3 px-4">{s.full_name}</td>
-                        <td className="py-3 px-4">{s.talk_title || '(TBC)'}</td>
-                        <td className="py-3 px-4">{formatDate(s.assigned_date)}</td>
-                        <td className="py-3 px-4">{s.host}</td>
-                        <td className="py-3 px-4">
-                          {hasTravelArrangements ? (
-                            <span className="text-green-600 font-semibold">✓ Arranged</span>
-                          ) : (
-                            <span className="text-amber-600 font-semibold">⚠ Pending</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4">
-                          {canEditSpeaker(s) && (
-                            <div className="flex gap-2">
-                              <button onClick={() => onViewAgenda(s)} className="px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600">Agenda</button>
-                              <button onClick={() => onEditConfirmed(s)} className="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Edit</button>
-                              <button onClick={() => onViewActions(s)} className="px-3 py-1 bg-sky-500 text-white rounded text-xs hover:bg-sky-600">Actions</button>
-                            </div>
-                          )}
-                          {!canEditSpeaker(s) && (
-                            <span className="text-xs text-neutral-400">Host only</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-  
-        {/* Recent Speaker Responses - AT BOTTOM */}
-        {recentResponses.length > 0 && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-xl font-semibold mb-4 text-neutral-800 flex items-center gap-2">
-              <span className="text-2xl">📬</span>
-              Recent Speaker Responses
-            </h3>
-            <div className="space-y-3">
-              {recentResponses.map(speaker => {
-                const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
-                const isRelevantToUser = 
-                  currentUser.role === 'Organizer' || 
-                  speaker.host === currentUser.full_name ||
-                  speaker.proposed_by_id === currentUser.id;
-                
-                return (
-                  <div 
-                    key={speaker.id}
-                    className={`border-l-4 rounded-lg p-4 ${
-                      isRelevantToUser ? 'bg-blue-50 border-blue-500' : 'bg-neutral-50 border-neutral-300'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-2xl">
-                            {responseAction.action === 'accepted' ? '✅' : '❌'}
-                          </span>
-                          <div>
-                            <div className="font-semibold text-neutral-800">{speaker.full_name}</div>
-                            <div className="text-sm text-neutral-600">
-                              {responseAction.action === 'accepted' ? 'accepted' : 'declined'} the invitation
-                            </div>
-                          </div>
-                          {isRelevantToUser && (
-                            <span className="ml-2 px-2 py-1 bg-blue-500 text-white text-xs font-semibold rounded">
-                              {speaker.host === currentUser.full_name ? 'You are host' : 
-                               speaker.proposed_by_id === currentUser.id ? 'Your proposal' : 
-                               'Organizer'}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-neutral-500 ml-8">
-                          {new Date(responseAction.timestamp).toLocaleString()}
-                          {responseAction.action === 'accepted' && speaker.assigned_date && (
-                            <span className="ml-3">
-                              📅 {formatDate(speaker.assigned_date)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setDismissedAlerts(prev => new Set([...prev, speaker.id]))}
-                        className="text-neutral-400 hover:text-neutral-600"
-                        title="Dismiss"
-                      >
-                        <X size={18} />
-                      </button>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
-    );
-  }
+
+      {/* Invited Speakers */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h3 className="text-xl font-semibold mb-4 text-neutral-800">
+          Invited Speakers Awaiting Response ({invitedSpeakers.length})
+        </h3>
+        <InvitedList
+          speakers={invitedSpeakers}
+          onResendInvitation={onResendInvitation}
+          onDeleteInvited={onDeleteInvited}
+          onViewAgenda={onViewAgenda}
+          formatDate={formatDate}
+          canEdit={(s) => canEditSpeaker(s)}
+          currentUserRole={currentUser.role}
+          allUsers={allUsers}
+          userAvailability={userAvailability}
+          availableDates={availableDates}
+        />
+      </div>
+
+      {/* Confirmed Upcoming Speakers - with travel arrangements highlighting */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-semibold text-neutral-800">
+            Confirmed Upcoming Speakers ({upcomingSpeakers.length})
+          </h3>
+          {userRole?.role ==='Organizer' && (
+            <button
+              onClick={onAddConfirmedSpeaker}
+              className="px-4 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
+            >
+              + Add Confirmed Speaker
+            </button>
+          )}
+        </div>
+
+        {upcomingSpeakers.length === 0 ? (
+          <p className="text-neutral-500 text-center py-8">No upcoming confirmed speakers</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b-2 border-neutral-200">
+                  <th className="text-left py-3 px-4 font-semibold text-neutral-700">Name</th>
+                  <th className="text-left py-3 px-4 font-semibold text-neutral-700">Title</th>
+                  <th className="text-left py-3 px-4 font-semibold text-neutral-700">Date</th>
+                  <th className="text-left py-3 px-4 font-semibold text-neutral-700">Host</th>
+                  <th className="text-left py-3 px-4 font-semibold text-neutral-700">Travel</th>
+                  <th className="text-left py-3 px-4 font-semibold text-neutral-700">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcomingSpeakers.map(s => {
+                  const hasTravelArrangements = s.actions?.some(a =>
+                    a.type === 'travel_arrangements' && a.completed
+                  );
+
+                  return (
+                    <tr key={s.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${!hasTravelArrangements ? 'bg-amber-50' : ''}`}>
+                      <td className="py-3 px-4">{s.full_name}</td>
+                      <td className="py-3 px-4">{s.talk_title || '(TBC)'}</td>
+                      <td className="py-3 px-4">{formatDate(s.assigned_date)}</td>
+                      <td className="py-3 px-4">{s.host}</td>
+                      <td className="py-3 px-4">
+                        {hasTravelArrangements ? (
+                          <span className="text-green-600 font-semibold">✓ Arranged</span>
+                        ) : (
+                          <span className="text-amber-600 font-semibold">⚠ Pending</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        {canEditSpeaker(s) && (
+                          <div className="flex gap-2">
+                            <button onClick={() => onViewAgenda(s)} className="px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600">Agenda</button>
+                            <button onClick={() => onEditConfirmed(s)} className="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Edit</button>
+                            <button onClick={() => onViewActions(s)} className="px-3 py-1 bg-sky-500 text-white rounded text-xs hover:bg-sky-600">Actions</button>
+                          </div>
+                        )}
+                        {!canEditSpeaker(s) && (
+                          <span className="text-xs text-neutral-400">Host only</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Recent Speaker Responses - AT BOTTOM */}
+      {recentResponses.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-xl font-semibold mb-4 text-neutral-800 flex items-center gap-2">
+            <span className="text-2xl">📬</span>
+            Recent Speaker Responses
+          </h3>
+          <div className="space-y-3">
+            {recentResponses.map(speaker => {
+              const responseAction = speaker.actions.find(a => a.type === 'speaker_responded');
+              const isRelevantToUser =
+                currentUser.role === 'Organizer' ||
+                speaker.host === currentUser.full_name ||
+                speaker.proposed_by_id === currentUser.id;
+
+              return (
+                <div
+                  key={speaker.id}
+                  className={`border-l-4 rounded-lg p-4 ${
+                    isRelevantToUser ? 'bg-blue-50 border-blue-500' : 'bg-neutral-50 border-neutral-300'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-2xl">
+                          {responseAction.action === 'accepted' ? '✅' : '❌'}
+                        </span>
+                        <div>
+                          <div className="font-semibold text-neutral-800">{speaker.full_name}</div>
+                          <div className="text-sm text-neutral-600">
+                            {responseAction.action === 'accepted' ? 'accepted' : 'declined'} the invitation
+                          </div>
+                        </div>
+                        {isRelevantToUser && (
+                          <span className="ml-2 px-2 py-1 bg-blue-500 text-white text-xs font-semibold rounded">
+                            {speaker.host === currentUser.full_name ? 'You are host' :
+                             speaker.proposed_by_id === currentUser.id ? 'Your proposal' :
+                             'Organizer'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-neutral-500 ml-8">
+                        {new Date(responseAction.timestamp).toLocaleString()}
+                        {responseAction.action === 'accepted' && speaker.assigned_date && (
+                          <span className="ml-3">
+                            📅 {formatDate(speaker.assigned_date)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setDismissedAlerts(prev => new Set([...prev, speaker.id]))}
+                      className="text-neutral-400 hover:text-neutral-600"
+                      title="Dismiss"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ---------------------
-   AvailabilityView - Updated with conflict support
+   ActivityLogView (Organizer-only)
+   - Shows latest actions across the app
+   - Labels by who did it
+   - Filter by user
+   --------------------- */
+
+   /* ---------------------
+   FellowsAvailabilityView - For organizers to see all fellows' availability
+   --------------------- */
+
+/* ---------------------
+   AvailabilityView - Updated with diagonal split cells and locked date availability
+   --------------------- */
+   /* ---------------------
+   AvailabilityView - Updated with diagonal split cells and locked date availability
+   --------------------- */
+/* ---------------------
+   AvailabilityView - Updated with diagonal split cells and locked date availability
    --------------------- */
    function AvailabilityView({ dates, userAvailability, currentUser, onUpdateAvailability, formatDate }) {
     const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
@@ -2809,9 +3211,8 @@ function SignupView({ invitation, onSignup }) {
     const [availabilityChoice, setAvailabilityChoice] = useState('available');
     
     function getInitialMonth() {
-      if (dates.length === 0) return new Date();
-      const firstDate = dates[0].date?.toDate ? dates[0].date.toDate() : new Date(dates[0].date);
-      return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+      const today = new Date();
+      return new Date(today.getFullYear(), today.getMonth(), 1);
     }
   
     const getDaysInMonth = (date) => {
@@ -2836,295 +3237,342 @@ function SignupView({ invitation, onSignup }) {
         return entryDate.getTime() === checkDate.getTime();
       });
   
-      if (!dateEntry) return null;
+      if (!dateEntry) return { available: null, hasDate: false };
   
-      const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === dateEntry.id);
-      
-      return { 
-        dateEntry, 
-        available: ua ? ua.available : true,
-        conflictNote: ua?.conflictNote || null
+      const userAvail = userAvailability.find(
+        ua => ua.user_id === currentUser.id && ua.date_id === dateEntry.id
+      );
+  
+      return {
+        available: userAvail ? userAvail.available : null,
+        hasDate: true,
+        dateId: dateEntry.id,
+        dateEntry: dateEntry,
+        isLocked: dateEntry.locked_by_id && dateEntry.locked_by_id !== 'DELETED',
+        isConflicting: dateEntry.is_conflicting || false,
+        lockedSpeaker: dateEntry.locked_by_name || null,
+        conflictNote: userAvail?.conflict_note || null,
+        userAvailability: userAvail
       };
     };
   
     const handleDateClick = (day) => {
-      const checkDate = new Date(year, month, day);
-      setSelectedDate(checkDate);
-      
-      // Pre-fill existing data if available
-      const checkDateString = checkDate.toISOString().split('T')[0];
-      const dateEntry = dates.find(d => {
-        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
-        return entryDate.toISOString().split('T')[0] === checkDateString;
-      });
-      
-      if (dateEntry) {
-        const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === dateEntry.id);
-        if (ua) {
-          setAvailabilityChoice(ua.conflictNote ? 'conflict' : (ua.available ? 'available' : 'unavailable'));
-          setConflictNote(ua.conflictNote || '');
-        } else {
-          setAvailabilityChoice('available');
-          setConflictNote('');
-        }
-      }
-      
+      const dateInfo = getDateInfo(day);
+      if (!dateInfo.hasDate || dateInfo.isConflicting) return;
+  
+      setSelectedDate({ day, ...dateInfo });
+      setAvailabilityChoice(
+        dateInfo.available === false ? 'unavailable' : 'available'
+      );
+      setConflictNote(dateInfo.conflictNote || '');
       setShowDateModal(true);
     };
   
-    const handleSaveAvailability = () => {
-      const checkDate = selectedDate;
-      checkDate.setHours(0, 0, 0, 0);
-      
-      const dateEntry = dates.find(d => {
-        const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
-        entryDate.setHours(0, 0, 0, 0);
-        return entryDate.getTime() === checkDate.getTime();
-      });
+    const handleSaveAvailability = async () => {
+      if (!selectedDate) return;
   
-      if (dateEntry) {
-        const isAvailable = availabilityChoice === 'available';
-        const note = availabilityChoice === 'conflict' ? conflictNote : null;
-        onUpdateAvailability(dateEntry.id, isAvailable, note);
-      } else {
-        alert('This date needs to be added to available dates first');
-      }
-      
+      const isAvailable = availabilityChoice === 'available';
+      const note = availabilityChoice === 'unavailable' ? conflictNote : '';
+  
+      await onUpdateAvailability(
+        selectedDate.dateId,
+        isAvailable,
+        note
+      );
+  
       setShowDateModal(false);
       setSelectedDate(null);
       setConflictNote('');
-      setAvailabilityChoice('available');
     };
-    
-    // Filter to only show unavailable dates
-    const unavailableDates = dates.filter(d => {
-      const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === d.id);
-      return ua && ua.available === false;
-    });
+  
+    const goToPreviousMonth = () => {
+      setCurrentMonth(new Date(year, month - 1, 1));
+    };
+  
+    const goToNextMonth = () => {
+      setCurrentMonth(new Date(year, month + 1, 1));
+    };
+  
+    const monthName = currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
   
     return (
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-2xl font-semibold mb-6">My Availability</h2>
-        
-        {/* Legend */}
-        <div className="flex gap-4 mb-6 text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-500 rounded"></div>
-            <span>Available</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-orange-500 rounded"></div>
-            <span>Conflicting date</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-blue-500 rounded"></div>
-            <span>Locked (speaker assigned)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-neutral-200 rounded"></div>
-            <span>No seminar scheduled</span>
-          </div>
-        </div>
+      <div className="space-y-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-2xl font-semibold mb-4">My Availability</h2>
+          <p className="text-neutral-600 mb-6">
+            Indicate your availability for upcoming seminar dates. Click on a date to set your availability.
+          </p>
   
-        <div className="grid grid-cols-2 gap-6">
-          {/* Left: Calendar */}
-          <div className="border rounded-lg p-4">
-            <div className="flex justify-between items-center mb-4">
-              <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1))} 
-                className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
-                ←
-              </button>
-              <h3 className="text-base font-semibold">
-                {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-              </h3>
-              <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1))} 
-                className="px-3 py-1 bg-primary text-white rounded hover:bg-primary/80 text-sm">
-                →
-              </button>
-            </div>
+          {/* Calendar Navigation */}
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={goToPreviousMonth}
+              className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+            >
+              ← Previous
+            </button>
+            <h3 className="text-xl font-semibold">{monthName}</h3>
+            <button
+              onClick={goToNextMonth}
+              className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+            >
+              Next →
+            </button>
+          </div>
   
-            <div className="grid grid-cols-7 gap-1 mb-2">
-              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
-                <div key={idx} className="text-center font-semibold text-xs text-neutral-600 py-1">
+          {/* Calendar Grid */}
+          <div className="border rounded-lg overflow-hidden">
+            {/* Weekday headers */}
+            <div className="grid grid-cols-7 bg-neutral-100">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                <div key={day} className="p-2 text-center font-semibold text-sm border-r last:border-r-0">
                   {day}
                 </div>
               ))}
             </div>
   
-            <div className="grid grid-cols-7 gap-1">
-              {Array.from({ length: startingDayOfWeek }).map((_, idx) => (
-                <div key={`empty-${idx}`} className="aspect-square"></div>
+            {/* Calendar days */}
+            <div className="grid grid-cols-7">
+              {/* Empty cells for days before month starts */}
+              {Array.from({ length: startingDayOfWeek }).map((_, i) => (
+                <div key={`empty-${i}`} className="border-r border-b h-28 bg-neutral-50" />
               ))}
   
-              {Array.from({ length: daysInMonth }).map((_, idx) => {
-                const day = idx + 1;
+              {/* Days of the month */}
+              {Array.from({ length: daysInMonth }).map((_, i) => {
+                const day = i + 1;
                 const dateInfo = getDateInfo(day);
-                
-                let bgColor = 'bg-neutral-100';
-                let textColor = '';
-                let cursor = 'cursor-pointer';
-                let hoverClass = 'hover:bg-neutral-200';
-                
-                if (dateInfo) {
-                  if (!dateInfo.dateEntry.available) {
-                    // Locked by speaker
-                    bgColor = 'bg-blue-500';
-                    textColor = 'text-white';
-                    hoverClass = 'hover:bg-blue-600';
-                  } else if (dateInfo.conflictNote) {
-                    // Has conflict
-                    bgColor = 'bg-orange-500';
-                    textColor = 'text-white';
-                    hoverClass = 'hover:bg-orange-600';
-                  } else if (dateInfo.available) {
-                    bgColor = 'bg-green-500';
-                    textColor = 'text-white';
-                    hoverClass = 'hover:bg-green-600';
-                  } else {
-                    bgColor = 'bg-orange-500';
-                    textColor = 'text-white';
-                    hoverClass = 'hover:bg-orange-600';
-                  }
+  
+                if (!dateInfo.hasDate) {
+                  return (
+                    <div
+                      key={day}
+                      className="border-r border-b h-28 bg-neutral-50 p-2"
+                    >
+                      <div className="font-semibold text-sm text-neutral-400">{day}</div>
+                    </div>
+                  );
                 }
   
+                // Conflicting date - entire cell marked as unavailable
+                if (dateInfo.isConflicting) {
+                  return (
+                    <div
+                      key={day}
+                      className="border-r border-b h-28 bg-orange-100 p-2 relative"
+                    >
+                      <div className="font-semibold text-sm text-orange-900">{day}</div>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="text-center">
+                          <div className="text-2xl mb-1">⚠️</div>
+                          <div className="text-xs font-semibold text-orange-800">
+                            Conflicting Date
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+  
+                // Normal diagonal split cell
                 return (
                   <div
                     key={day}
+                    className="border-r border-b h-28 relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all"
                     onClick={() => handleDateClick(day)}
-                    className={`aspect-square flex items-center justify-center rounded text-sm font-medium ${bgColor} ${textColor} ${cursor} ${hoverClass} transition-colors`}
                   >
-                    {day}
+                    {/* Day number - top left corner */}
+                    <div className="absolute top-1 left-2 font-semibold text-sm z-10">
+                      {day}
+                    </div>
+  
+                    {/* Diagonal split - Your availability (top-left triangle) */}
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        clipPath: 'polygon(0 0, 100% 0, 0 100%)',
+                        backgroundColor: 
+                          dateInfo.available === true ? '#dcfce7' : // green-100
+                          dateInfo.available === false ? '#fee2e2' : // red-100
+                          '#f3f4f6' // gray-100 (not set)
+                      }}
+                    >
+                      <div className="absolute top-8 left-2 text-xs font-medium max-w-[85%] leading-tight">
+                        {dateInfo.available === true && (
+                          <span className="text-green-700 font-semibold">✓ Available</span>
+                        )}
+                        {dateInfo.available === false && (
+                          <div className="text-red-700 font-semibold">
+                            <div>✗ Conflict</div>
+                            {dateInfo.conflictNote && (
+                              <div className="text-red-600 text-[9px] mt-0.5 font-normal line-clamp-2">
+                                {dateInfo.conflictNote}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {dateInfo.available === null && (
+                          <span className="text-neutral-500">Not set</span>
+                        )}
+                      </div>
+                    </div>
+  
+                    {/* Diagonal split - Speaker info (bottom-right triangle) */}
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        clipPath: 'polygon(100% 0, 100% 100%, 0 100%)',
+                        backgroundColor: dateInfo.isLocked ? '#dbeafe' : '#f9fafb' // blue-100 or gray-50
+                      }}
+                    >
+                      <div className="absolute bottom-2 right-2 text-right text-xs font-medium max-w-[85%] leading-tight">
+                        {dateInfo.isLocked ? (
+                          <>
+                            <div className="text-blue-700 font-semibold">🔒 Locked</div>
+                            <div className="text-blue-600 text-[10px] truncate">
+                              {dateInfo.lockedSpeaker}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-neutral-400">Open</span>
+                        )}
+                      </div>
+                    </div>
+  
+                    {/* Diagonal line */}
+                    <div
+                      className="absolute inset-0 pointer-events-none"
+                      style={{
+                        background: 'linear-gradient(to bottom right, transparent calc(50% - 1px), #d1d5db calc(50%), transparent calc(50% + 1px))'
+                      }}
+                    />
                   </div>
                 );
               })}
             </div>
           </div>
   
-          {/* Right: Unavailable Dates Only */}
-          <div className="border rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-4">Unavailable Dates</h3>
-            {unavailableDates.length === 0 ? (
-              <p className="text-sm text-neutral-500 text-center py-8">You have no unavailable dates marked.</p>
-            ) : (
-              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
-                {unavailableDates.map(d => {
-                  const ua = userAvailability.find(u => u.user_id === currentUser.id && u.date_id === d.id);
-                  const conflictNote = ua?.conflictNote || null;
-                  const isLocked = !d.available;
-                  
-                  let bgColor = 'bg-orange-50 border-orange-200';
-                  let statusColor = 'bg-orange-100 text-orange-800';
-                  let statusText = '✗ Unavailable';
-                  
-                  if (conflictNote) {
-                    statusText = '⚠ Conflict';
-                  }
-                  
-                  return (
-                    <div key={d.id} className={`border rounded-lg p-3 ${bgColor}`}>
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="font-semibold text-base bg-white inline-block px-2 py-1 rounded">
-                            {formatDate(d.date)}
-                          </div>
-                          <div className="text-sm text-neutral-600 mt-1">
-                            <strong>Host:</strong> {d.host}
-                          </div>
-                          {d.notes && (
-                            <div className="text-xs text-neutral-500 mt-1">
-                              📍 {d.notes}
-                            </div>
-                          )}
-                          {conflictNote && (
-                            <div className="text-xs text-orange-700 mt-2 bg-white p-2 rounded italic">
-                              <strong>Your conflict:</strong> {conflictNote}
-                            </div>
-                          )}
-                        </div>
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColor}`}>
-                          {statusText}
-                        </span>
-                      </div>
-                      {!isLocked && (
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onUpdateAvailability(d.id, true, null);
-                          }}
-                          className="w-full px-3 py-2 bg-orange-500 text-white rounded text-sm hover:bg-orange-600 transition-colors"
-                        >
-                          Mark as Available
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+          {/* Legend */}
+          <div className="mt-6 space-y-3">
+            <h4 className="font-semibold text-sm text-neutral-700">Legend:</h4>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="font-medium mb-2">Your Availability (Top-left):</div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-green-100 border rounded"></div>
+                    <span>Available</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-red-100 border rounded"></div>
+                    <span>Not Available</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-gray-100 border rounded"></div>
+                    <span>Not Set</span>
+                  </div>
+                </div>
               </div>
-            )}
+              <div>
+                <div className="font-medium mb-2">Date Status (Bottom-right):</div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-blue-100 border rounded"></div>
+                    <span>Locked (Speaker assigned)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-gray-50 border rounded"></div>
+                    <span>Open (No speaker yet)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 bg-orange-100 border rounded"></div>
+                    <span>⚠️ Conflicting Date (Cannot set availability)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
   
-        {/* Date Selection Modal */}
-        {showDateModal && (
+        {/* Modal for setting availability */}
+        {showDateModal && selectedDate && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-96">
-              <h3 className="text-lg font-semibold mb-4">
-                Set Availability for {selectedDate?.toLocaleDateString()}
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+              <h3 className="text-xl font-semibold mb-4">
+                Set Availability for {monthName} {selectedDate.day}
               </h3>
+  
+              {selectedDate.isLocked && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
+                  <div className="text-sm font-medium text-blue-900">
+                    🔒 This date is locked for: {selectedDate.lockedSpeaker}
+                  </div>
+                  <div className="text-xs text-blue-700 mt-1">
+                    You can still indicate if you're available to host or attend.
+                  </div>
+                </div>
+              )}
+  
               <div className="space-y-4">
                 <div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="availability" 
-                      value="available"
-                      checked={availabilityChoice === 'available'}
-                      onChange={(e) => {
-                        setAvailabilityChoice('available');
-                        setConflictNote('');
-                      }}
-                    />
-                    <span className="text-green-600 font-medium">Available</span>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Your Availability
                   </label>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        value="available"
+                        checked={availabilityChoice === 'available'}
+                        onChange={(e) => setAvailabilityChoice(e.target.value)}
+                        className="w-4 h-4"
+                      />
+                      <span>I am available</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        value="unavailable"
+                        checked={availabilityChoice === 'unavailable'}
+                        onChange={(e) => setAvailabilityChoice(e.target.value)}
+                        className="w-4 h-4"
+                      />
+                      <span>I have a conflict</span>
+                    </label>
+                  </div>
                 </div>
-                <div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="availability" 
-                      value="conflict"
-                      checked={availabilityChoice === 'conflict'}
-                      onChange={(e) => setAvailabilityChoice('conflict')}
-                    />
-                    <span className="text-orange-600 font-medium">Unavailable due to conflict</span>
-                  </label>
-                  {availabilityChoice === 'conflict' && (
+  
+                {availabilityChoice === 'unavailable' && (
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Conflict Note (Optional)
+                    </label>
                     <textarea
-                      className="w-full mt-2 border rounded px-3 py-2 text-sm min-h-[80px]"
-                      placeholder="Explain the conflict..."
                       value={conflictNote}
                       onChange={(e) => setConflictNote(e.target.value)}
-                      rows={3}
+                      className="w-full border rounded px-3 py-2 text-sm"
+                      rows="3"
+                      placeholder="e.g., Travel, Conference, Teaching..."
                     />
-                  )}
-                </div>
-                <div className="flex gap-2 mt-4">
-                  <button
-                    onClick={handleSaveAvailability}
-                    className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
-                  >
-                    Save
-                  </button>
+                  </div>
+                )}
+  
+                <div className="flex justify-end gap-2 pt-4">
                   <button
                     onClick={() => {
                       setShowDateModal(false);
                       setSelectedDate(null);
                       setConflictNote('');
-                      setAvailabilityChoice('available');
                     }}
-                    className="flex-1 px-4 py-2 border rounded hover:bg-neutral-100"
+                    className="px-4 py-2 border rounded hover:bg-neutral-50"
                   >
                     Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveAvailability}
+                    className="px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark"
+                  >
+                    Save
                   </button>
                 </div>
               </div>
@@ -3135,6 +3583,717 @@ function SignupView({ invitation, onSignup }) {
     );
   }
 
+  function ActivityLogView({ db, allUsers, formatDate }) {
+    const [activity, setActivity] = useState([]);
+    const [loading, setLoading] = useState(true);
+  
+    // Filters
+    const [selectedUserId, setSelectedUserId] = useState('all');
+    const [searchText, setSearchText] = useState('');
+  
+    // Pagination / limit (simple)
+    const [limitCount, setLimitCount] = useState(100);
+  
+    useEffect(() => {
+      setLoading(true);
+  
+      // Base query: latest first
+      // Note: "createdAt" should be serverTimestamp() when logged
+      const baseRef = collection(db, 'activity_log');
+      let q = query(baseRef, orderBy('createdAt', 'desc'), limit(limitCount));
+  
+      // Optional server-side filter by user id (if you store actorId)
+      if (selectedUserId !== 'all') {
+        q = query(
+          baseRef,
+          where('actorId', '==', selectedUserId),
+          orderBy('createdAt', 'desc'),
+          limit(limitCount)
+        );
+      }
+  
+      const unsub = onSnapshot(
+        q,
+        (snap) => {
+          const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setActivity(items);
+          setLoading(false);
+        },
+        (err) => {
+          console.error('ActivityLogView onSnapshot error:', err);
+          setActivity([]);
+          setLoading(false);
+        }
+      );
+  
+      return () => unsub();
+    }, [db, selectedUserId, limitCount]);
+  
+    const normalized = (s) => (s || '').toLowerCase().trim();
+  
+    // Client-side text search (actor name/email/type/summary)
+    const filtered = activity.filter(a => {
+      const t = normalized(searchText);
+      if (!t) return true;
+  
+      return (
+        normalized(a.actorName).includes(t) ||
+        normalized(a.actorEmail).includes(t) ||
+        normalized(a.type).includes(t) ||
+        normalized(a.summary).includes(t) ||
+        normalized(a.targetType).includes(t)
+      );
+    });
+  
+    const renderTypeBadge = (type) => {
+      const base = "px-2 py-1 rounded-full text-xs font-semibold";
+      switch (type) {
+        case 'speaker_proposed':
+          return <span className={`${base} bg-blue-100 text-blue-800`}>Speaker proposed</span>;
+        case 'speaker_edited':
+          return <span className={`${base} bg-amber-100 text-amber-800`}>Speaker edited</span>;
+        case 'speaker_invited':
+          return <span className={`${base} bg-green-100 text-green-800`}>Speaker invited</span>;
+        case 'availability_updated':
+          return <span className={`${base} bg-purple-100 text-purple-800`}>Availability updated</span>;
+        case 'date_updated':
+          return <span className={`${base} bg-neutral-100 text-neutral-800`}>Date updated</span>;
+        default:
+          return <span className={`${base} bg-neutral-100 text-neutral-700`}>{type || 'unknown'}</span>;
+      }
+    };
+  
+    const formatWhen = (a) => {
+      // createdAt may be Firestore Timestamp
+      const d = safeToDate(a.createdAt);
+      if (!d) return '—';
+      return d.toLocaleString();
+    };
+  
+    return (
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-xl font-semibold text-neutral-800">Activity Log</h2>
+            <div className="text-sm text-neutral-500">
+              Latest actions across the app (Organizer-only)
+            </div>
+          </div>
+  
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-1 rounded text-sm bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+              onClick={() => setLimitCount(v => Math.min(v + 100, 500))}
+              title="Load more"
+            >
+              Load more
+            </button>
+          </div>
+        </div>
+  
+        {/* Filters */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          <div>
+            <label className="text-sm text-neutral-600 block mb-1">Filter by user</label>
+            <select
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              className="w-full border rounded px-3 py-2 bg-white"
+            >
+              <option value="all">All users</option>
+              {(allUsers || []).map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name} ({u.role})
+                </option>
+              ))}
+            </select>
+          </div>
+  
+          <div className="md:col-span-2">
+            <label className="text-sm text-neutral-600 block mb-1">Search</label>
+            <input
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="w-full border rounded px-3 py-2"
+              placeholder="Search by actor, email, type, summary…"
+            />
+          </div>
+        </div>
+  
+        {/* Content */}
+        {loading ? (
+          <div className="text-neutral-600">Loading activity…</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-neutral-500">No activity found for these filters.</div>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map(a => (
+              <div key={a.id} className="border rounded-lg p-3 hover:border-primary transition-colors">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {renderTypeBadge(a.type)}
+                      <span className="text-sm text-neutral-600">
+                        <strong>{a.actorName || 'Unknown user'}</strong>
+                        {a.actorEmail ? <span className="text-neutral-400"> • {a.actorEmail}</span> : null}
+                      </span>
+                    </div>
+  
+                    <div className="text-sm text-neutral-700 mt-2">
+                      {a.summary || '(no summary)'}
+                    </div>
+  
+                    <div className="text-xs text-neutral-500 mt-2">
+                      {formatWhen(a)}
+                      {a.targetType ? <span> • target: {a.targetType}</span> : null}
+                      {a.targetId ? <span> • id: {a.targetId}</span> : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ---------------------
+   FellowsAvailabilityView - For organizers to see all fellows' availability
+   --------------------- */
+function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers, activityLogs, formatDate, allUsers }) {
+  const [selectedSubTab, setSelectedSubTab] = useState('overview');
+  const [selectedFellow, setSelectedFellow] = useState(null);
+  const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
+  const [hostingFilter, setHostingFilter] = useState('all');
+  const [activityFilter, setActivityFilter] = useState('all');
+  const [overviewFilter, setOverviewFilter] = useState('all');
+
+  function getInitialMonth() {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  }
+
+  // Calculate statistics for each fellow
+  const fellowStats = useMemo(() => {
+    return seniorFellows.map(fellow => {
+      // Speakers proposed
+      const proposedSpeakers = speakers.filter(s => s.proposed_by_id === fellow.id);
+      
+      // Active proposals (not yet accepted or past)
+      const activeProposals = proposedSpeakers.filter(s => 
+        s.status === 'Proposed' || s.status === 'Under Review'
+      );
+      
+      // Votes submitted on active speakers proposed by others
+      const votesSubmitted = speakers.filter(s => 
+        s.proposed_by_id !== fellow.id && 
+        (s.status === 'Proposed' || s.status === 'Under Review') &&
+        s.votes?.some(v => v.user_id === fellow.id)
+      ).length;
+      
+      // Speakers hosted (confirmed/past with this fellow as host)
+      const speakersHosted = speakers.filter(s => 
+        (s.status === 'Accepted' || s.status === 'Confirmed') &&
+        s.confirmed_host_id === fellow.id
+      );
+      
+      // Recent activity from logs
+      const recentActivity = activityLogs
+        .filter(log => log.user_id === fellow.id)
+        .slice(0, 10);
+      
+      return {
+        fellow,
+        proposedCount: proposedSpeakers.length,
+        activeProposalsCount: activeProposals.length,
+        votesSubmitted,
+        hostedCount: speakersHosted.length,
+        recentActivity
+      };
+    });
+  }, [seniorFellows, speakers, activityLogs]);
+
+  const getDaysInMonth = (date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    return { daysInMonth, startingDayOfWeek, year, month };
+  };
+
+  const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth);
+
+  const getDateInfo = (day) => {
+    const checkDate = new Date(year, month, day);
+    checkDate.setHours(0, 0, 0, 0);
+    
+    const dateEntry = dates.find(d => {
+      const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+      entryDate.setHours(0, 0, 0, 0);
+      return entryDate.getTime() === checkDate.getTime();
+    });
+
+    if (!dateEntry || !selectedFellow) return { available: null, hasDate: false };
+
+    const fellowAvailability = userAvailability.find(
+      ua => ua.user_id === selectedFellow.id && ua.date_id === dateEntry.id
+    );
+
+    return {
+      available: fellowAvailability ? fellowAvailability.available : true,
+      hasDate: true,
+      isLocked: dateEntry.locked_by_id && dateEntry.locked_by_id !== 'DELETED',
+      lockedSpeaker: dateEntry.locked_by_name,
+      conflictNote: fellowAvailability?.conflict_note || null
+    };
+  };
+
+  const goToPreviousMonth = () => {
+    setCurrentMonth(new Date(year, month - 1, 1));
+  };
+
+  const goToNextMonth = () => {
+    setCurrentMonth(new Date(year, month + 1, 1));
+  };
+
+  const monthName = currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  // Overview Tab
+  const renderOverview = () => {
+    // Filter fellowship stats by selected fellow
+    const filteredStats = overviewFilter === 'all' 
+      ? fellowStats 
+      : fellowStats.filter(stat => stat.fellow.id === overviewFilter);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-semibold">Fellows Activity Overview</h3>
+          
+          {/* Fellow Filter Dropdown */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-neutral-700">Filter by Fellow:</label>
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={overviewFilter}
+              onChange={(e) => setOverviewFilter(e.target.value)}
+            >
+              <option value="all">All Fellows</option>
+              {seniorFellows
+                .sort((a, b) => a.full_name.localeCompare(b.full_name))
+                .map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.full_name}
+                  </option>
+                ))
+              }
+            </select>
+          </div>
+        </div>
+
+        {filteredStats.length === 0 ? (
+          <div className="bg-white rounded-lg p-6 text-center text-neutral-600">
+            No fellows found.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredStats
+              .sort((a, b) => a.fellow.full_name.localeCompare(b.fellow.full_name))
+              .map(({ fellow, proposedCount, activeProposalsCount, votesSubmitted, hostedCount }) => (
+              <div key={fellow.id} className="bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
+                <h4 className="font-semibold text-lg mb-3">{fellow.full_name}</h4>
+                <div className="text-sm text-neutral-600 mb-1">
+                  <span className="font-medium">{fellow.role}</span>
+                </div>
+                <div className="space-y-2 mt-3">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-neutral-600">Speakers Proposed:</span>
+                    <span className="font-semibold text-blue-600">{proposedCount}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-neutral-600">Active Proposals:</span>
+                    <span className="font-semibold text-green-600">{activeProposalsCount}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-neutral-600">Votes Submitted:</span>
+                    <span className="font-semibold text-purple-600">{votesSubmitted}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-neutral-600">Speakers Hosted:</span>
+                    <span className="font-semibold text-orange-600">{hostedCount}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Availability Calendar Tab
+  const renderAvailability = () => (
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg shadow p-6">
+        <h3 className="text-xl font-semibold mb-4">Fellows Availability Calendar</h3>
+        <p className="text-neutral-600 mb-6">
+          View the availability of all fellows and senior fellows for seminar dates.
+        </p>
+
+        {/* Fellow Selection */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-neutral-700 mb-2">
+            Select Fellow
+          </label>
+          <select
+            className="w-full max-w-md border rounded px-3 py-2"
+            value={selectedFellow?.id || ''}
+            onChange={(e) => {
+              const fellow = seniorFellows.find(f => f.id === e.target.value);
+              setSelectedFellow(fellow || null);
+            }}
+          >
+            <option value="">-- Select a Fellow --</option>
+            {seniorFellows
+              .sort((a, b) => a.full_name.localeCompare(b.full_name))
+              .map(f => (
+                <option key={f.id} value={f.id}>
+                  {f.full_name} ({f.role})
+                </option>
+              ))
+            }
+          </select>
+        </div>
+
+        {selectedFellow && (
+          <>
+            {/* Calendar Navigation */}
+            <div className="flex items-center justify-between mb-4">
+              <button
+                onClick={goToPreviousMonth}
+                className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              >
+                ← Previous
+              </button>
+              <h3 className="text-xl font-semibold">{monthName}</h3>
+              <button
+                onClick={goToNextMonth}
+                className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              >
+                Next →
+              </button>
+            </div>
+
+            {/* Calendar Grid */}
+            <div className="border rounded-lg overflow-hidden">
+              {/* Weekday headers */}
+              <div className="grid grid-cols-7 bg-neutral-100">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                  <div key={day} className="p-2 text-center font-semibold text-sm border-r last:border-r-0">
+                    {day}
+                  </div>
+                ))}
+              </div>
+
+              {/* Calendar days */}
+              <div className="grid grid-cols-7">
+                {/* Empty cells for days before month starts */}
+                {Array.from({ length: startingDayOfWeek }).map((_, i) => (
+                  <div key={`empty-${i}`} className="border-r border-b p-2 h-24 bg-neutral-50" />
+                ))}
+
+                {/* Days of the month */}
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const day = i + 1;
+                  const dateInfo = getDateInfo(day);
+
+                  let bgColor = 'bg-white';
+                  if (dateInfo.hasDate && dateInfo.available === true) {
+                    bgColor = 'bg-green-50';
+                  } else if (dateInfo.hasDate && dateInfo.available === false) {
+                    bgColor = 'bg-red-50';
+                  } else if (!dateInfo.hasDate) {
+                    bgColor = 'bg-neutral-50';
+                  }
+
+                  return (
+                    <div
+                      key={day}
+                      className={`border-r border-b p-2 h-24 ${bgColor} relative`}
+                    >
+                      <div className="font-semibold text-sm mb-1">{day}</div>
+                      {dateInfo.hasDate && (
+                        <>
+                          {dateInfo.available === true && (
+                            <div className="text-xs text-green-700 font-medium">Available</div>
+                          )}
+                          {dateInfo.available === false && (
+                            <>
+                              <div className="text-xs text-red-700 font-medium">Not Available</div>
+                              {dateInfo.conflictNote && (
+                                <div className="text-xs text-neutral-600 mt-1 line-clamp-2">
+                                  {dateInfo.conflictNote}
+                                </div>
+                              )}
+                            </>
+                          )}
+                          {dateInfo.isLocked && (
+                            <div className="text-xs text-blue-700 font-medium mt-1">
+                              Locked: {dateInfo.lockedSpeaker}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div className="mt-4 flex gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-green-50 border"></div>
+                <span>Available</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-red-50 border"></div>
+                <span>Not Available</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-neutral-50 border"></div>
+                <span>No Seminar Date</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  // Recent Activity Tab
+  const renderRecentActivity = () => {
+    // Filter activity logs by selected fellow
+    const filteredLogs = activityFilter === 'all' 
+      ? activityLogs 
+      : activityLogs.filter(log => log.user_id === activityFilter);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-semibold">Recent Fellow Activity</h3>
+          
+          {/* Fellow Filter Dropdown */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-neutral-700">Filter by Fellow:</label>
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={activityFilter}
+              onChange={(e) => setActivityFilter(e.target.value)}
+            >
+              <option value="all">All Fellows</option>
+              {seniorFellows
+                .sort((a, b) => a.full_name.localeCompare(b.full_name))
+                .map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.full_name}
+                  </option>
+                ))
+              }
+            </select>
+          </div>
+        </div>
+        
+        {filteredLogs.length === 0 ? (
+          <div className="bg-white rounded-lg p-6 text-center text-neutral-600">
+            {activityFilter === 'all' 
+              ? 'No activity logs available yet.'
+              : 'No activity logs found for this fellow.'}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredLogs.slice(0, 50).map((log) => {
+              const user = allUsers.find(u => u.id === log.user_id);
+              const userName = user?.full_name || 'Unknown User';
+              const timestamp = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
+              
+              return (
+                <div key={log.id} className="bg-white border rounded-lg p-4 shadow-sm">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="font-semibold text-neutral-800">{userName}</div>
+                    <div className="text-xs text-neutral-500">
+                      {timestamp.toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="text-sm text-neutral-700">
+                    <span className="font-medium text-blue-600">{log.action_type}</span>
+                    {log.description && <span className="ml-2">{log.description}</span>}
+                  </div>
+                  {log.metadata && Object.keys(log.metadata).length > 0 && (
+                    <div className="mt-2 text-xs text-neutral-500">
+                      {JSON.stringify(log.metadata, null, 2)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Hosting History Tab
+  const renderHostingHistory = () => {
+    // Calculate hosting data for all fellows
+    const allHostingData = seniorFellows.map(fellow => {
+      const hosted = speakers.filter(s => 
+        (s.status === 'Accepted' || s.status === 'Confirmed') &&
+        s.confirmed_host_id === fellow.id
+      );
+      return { fellow, hosted };
+    }).filter(item => item.hosted.length > 0)
+      .sort((a, b) => b.hosted.length - a.hosted.length);
+
+    // Filter by selected fellow
+    const hostingData = hostingFilter === 'all' 
+      ? allHostingData 
+      : allHostingData.filter(item => item.fellow.id === hostingFilter);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-semibold">Hosting History</h3>
+          
+          {/* Fellow Filter Dropdown */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-neutral-700">Filter by Fellow:</label>
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={hostingFilter}
+              onChange={(e) => setHostingFilter(e.target.value)}
+            >
+              <option value="all">All Fellows</option>
+              {seniorFellows
+                .filter(f => speakers.some(s => 
+                  (s.status === 'Accepted' || s.status === 'Confirmed') && 
+                  s.confirmed_host_id === f.id
+                ))
+                .sort((a, b) => a.full_name.localeCompare(b.full_name))
+                .map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.full_name}
+                  </option>
+                ))
+              }
+            </select>
+          </div>
+        </div>
+        
+        {hostingData.length === 0 ? (
+          <div className="bg-white rounded-lg p-6 text-center text-neutral-600">
+            {hostingFilter === 'all' 
+              ? 'No hosting history available yet.'
+              : 'No hosting history found for this fellow.'}
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {hostingData.map(({ fellow, hosted }) => (
+              <div key={fellow.id} className="bg-white border rounded-lg p-6 shadow-sm">
+                <h4 className="font-semibold text-lg mb-4">
+                  {fellow.full_name} ({hosted.length} speaker{hosted.length !== 1 ? 's' : ''} hosted)
+                </h4>
+                <div className="space-y-3">
+                  {hosted
+                    .sort((a, b) => {
+                      const dateA = a.locked_date?.toDate ? a.locked_date.toDate() : new Date(a.locked_date || 0);
+                      const dateB = b.locked_date?.toDate ? b.locked_date.toDate() : new Date(b.locked_date || 0);
+                      return dateB - dateA;
+                    })
+                    .map(speaker => (
+                    <div key={speaker.id} className="flex justify-between items-center border-l-4 border-blue-500 pl-4 py-2">
+                      <div>
+                        <div className="font-medium">{speaker.name}</div>
+                        <div className="text-sm text-neutral-600">{speaker.affiliation}</div>
+                        {speaker.title && (
+                          <div className="text-sm text-neutral-500 italic mt-1">{speaker.title}</div>
+                        )}
+                      </div>
+                      <div className="text-right text-sm">
+                        {speaker.locked_date ? formatDate(speaker.locked_date) : 'Date TBD'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-2xl font-semibold mb-4">Fellows Activity</h2>
+        
+        {/* Sub-navigation tabs */}
+        <div className="flex gap-2 mb-6 border-b">
+          <button
+            onClick={() => setSelectedSubTab('overview')}
+            className={`px-4 py-2 font-medium transition-colors ${
+              selectedSubTab === 'overview'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-neutral-600 hover:text-neutral-800'
+            }`}
+          >
+            Overview
+          </button>
+          <button
+            onClick={() => setSelectedSubTab('availability')}
+            className={`px-4 py-2 font-medium transition-colors ${
+              selectedSubTab === 'availability'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-neutral-600 hover:text-neutral-800'
+            }`}
+          >
+            Availability Calendar
+          </button>
+          <button
+            onClick={() => setSelectedSubTab('hosting')}
+            className={`px-4 py-2 font-medium transition-colors ${
+              selectedSubTab === 'hosting'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-neutral-600 hover:text-neutral-800'
+            }`}
+          >
+            Hosting History
+          </button>
+          <button
+            onClick={() => setSelectedSubTab('activity')}
+            className={`px-4 py-2 font-medium transition-colors ${
+              selectedSubTab === 'activity'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-neutral-600 hover:text-neutral-800'
+            }`}
+          >
+            Recent Activity
+          </button>
+        </div>
+      </div>
+
+      {/* Render selected sub-tab content */}
+      {selectedSubTab === 'overview' && renderOverview()}
+      {selectedSubTab === 'availability' && renderAvailability()}
+      {selectedSubTab === 'hosting' && renderHostingHistory()}
+      {selectedSubTab === 'activity' && renderRecentActivity()}
+    </div>
+  );
+}
 /* ---------------------
    StatisticsView with Modals (keeping bar charts)
    --------------------- */
@@ -3699,11 +4858,10 @@ function SignupView({ invitation, onSignup }) {
    DatesView - Updated to match AvailabilityView layout
    --------------------- */
    function DatesView({ dates, speakers, onAddDateDirect, onDeleteDate, formatDate }) {
-    const getInitialMonth = () => {
-      if (dates.length === 0) return new Date();
-      const firstDate = dates[0].date?.toDate ? dates[0].date.toDate() : new Date(dates[0].date);
-      return new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
-    };
+    function getInitialMonth() {
+      const today = new Date();
+      return new Date(today.getFullYear(), today.getMonth(), 1);
+    }
     
     const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
     const [showAddDateModal, setShowAddDateModal] = useState(false);
@@ -4187,6 +5345,339 @@ function SignupView({ invitation, onSignup }) {
       </div>
     );
   }
+
+  /* ---------------------
+   LockedSpeakersMiniCalendar - Clickable locked dates with talk info
+   --------------------- */
+function LockedSpeakersMiniCalendar({ dates, speakers }) {
+  const [currentMonth, setCurrentMonth] = useState(getInitialMonth());
+  const [selectedSpeaker, setSelectedSpeaker] = useState(null);
+  const [showSpeakerModal, setShowSpeakerModal] = useState(false);
+
+  function getInitialMonth() {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  }
+
+  const getDaysInMonth = (date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    return { daysInMonth, startingDayOfWeek, year, month };
+  };
+
+  const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth);
+
+  const getDateInfo = (day) => {
+    const checkDate = new Date(year, month, day);
+    checkDate.setHours(0, 0, 0, 0);
+
+    const dateEntry = dates.find(d => {
+      const entryDate = d.date?.toDate ? d.date.toDate() : new Date(d.date);
+      entryDate.setHours(0, 0, 0, 0);
+      return entryDate.getTime() === checkDate.getTime();
+    });
+
+    if (!dateEntry) {
+      return { hasDate: false };
+    }
+
+    const isLocked = dateEntry.locked_by_id && dateEntry.locked_by_id !== 'DELETED';
+    const isConflicting = dateEntry.is_conflicting || false;
+    const isAvailable = dateEntry.available && !isLocked && !isConflicting;
+
+    let speaker = null;
+    if (isLocked) {
+      speaker = speakers.find(s => s.id === dateEntry.locked_by_id);
+    }
+
+    return {
+      hasDate: true,
+      isLocked,
+      isConflicting,
+      isAvailable,
+      speaker,
+      dateEntry
+    };
+  };
+
+  const handleDateClick = (day) => {
+    const dateInfo = getDateInfo(day);
+    if (dateInfo.speaker) {
+      setSelectedSpeaker(dateInfo.speaker);
+      setShowSpeakerModal(true);
+    }
+  };
+
+  const goToPreviousMonth = () => {
+    setCurrentMonth(new Date(year, month - 1, 1));
+  };
+
+  const goToNextMonth = () => {
+    setCurrentMonth(new Date(year, month + 1, 1));
+  };
+
+  const monthName = currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  return (
+    <div className="bg-white rounded-lg border p-4">
+      <h3 className="font-semibold mb-3 text-neutral-800">Upcoming Speakers</h3>
+
+      {/* Calendar Navigation */}
+      <div className="flex items-center justify-between mb-3">
+        <button
+          onClick={goToPreviousMonth}
+          className="p-1 hover:bg-neutral-100 rounded"
+        >
+          ←
+        </button>
+        <div className="text-sm font-semibold">{monthName}</div>
+        <button
+          onClick={goToNextMonth}
+          className="p-1 hover:bg-neutral-100 rounded"
+        >
+          →
+        </button>
+      </div>
+
+      {/* Calendar Grid */}
+      <div className="border rounded overflow-hidden">
+        {/* Weekday headers */}
+        <div className="grid grid-cols-7 bg-neutral-100">
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
+            <div key={idx} className="p-1 text-center text-xs font-semibold border-r last:border-r-0">
+              {day}
+            </div>
+          ))}
+        </div>
+
+        {/* Calendar days */}
+        <div className="grid grid-cols-7">
+          {/* Empty cells for days before month starts */}
+          {Array.from({ length: startingDayOfWeek }).map((_, i) => (
+            <div key={`empty-${i}`} className="border-r border-b h-10 bg-neutral-50" />
+          ))}
+
+          {/* Days of the month */}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const day = i + 1;
+            const dateInfo = getDateInfo(day);
+
+            let bgColor = 'bg-white';
+            let textColor = 'text-neutral-600';
+            let hoverClass = '';
+            let isClickable = false;
+
+            if (dateInfo.hasDate) {
+              if (dateInfo.isLocked && dateInfo.speaker) {
+                // Locked with speaker - Blue, clickable
+                bgColor = 'bg-blue-50';
+                textColor = 'text-blue-700';
+                hoverClass = 'hover:bg-blue-100 cursor-pointer';
+                isClickable = true;
+              } else if (dateInfo.isConflicting) {
+                // Conflicting date - Orange
+                bgColor = 'bg-orange-50';
+                textColor = 'text-orange-700';
+              } else if (dateInfo.isAvailable) {
+                // Available, no speaker - Green
+                bgColor = 'bg-green-50';
+                textColor = 'text-green-700';
+              }
+            }
+
+            return (
+              <div
+                key={day}
+                className={`border-r border-b h-10 p-1 text-xs relative ${bgColor} ${hoverClass} transition-colors`}
+                onClick={() => isClickable && handleDateClick(day)}
+              >
+                <div className={`font-semibold ${textColor}`}>
+                  {day}
+                </div>
+                {dateInfo.speaker && (
+                  <div className="text-[9px] text-blue-600 truncate leading-tight">
+                    {dateInfo.speaker.full_name?.split(' ').slice(-1)[0]}
+                  </div>
+                )}
+                {dateInfo.isConflicting && (
+                  <div className="text-[9px] text-orange-600 truncate leading-tight">
+                    No seminar
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="mt-3 space-y-1 text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-blue-50 border rounded"></div>
+          <span className="text-neutral-600">Speaker confirmed (click for details)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-green-50 border rounded"></div>
+          <span className="text-neutral-600">Available, no speaker yet</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-orange-50 border rounded"></div>
+          <span className="text-neutral-600">No seminar (conflicting)</span>
+        </div>
+      </div>
+
+      {/* Speaker Info Modal */}
+      {showSpeakerModal && selectedSpeaker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="p-6 border-b bg-primary text-white">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-2xl font-bold">{selectedSpeaker.full_name}</h3>
+                  <p className="text-sm text-neutral-200 mt-1">{selectedSpeaker.affiliation}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowSpeakerModal(false);
+                    setSelectedSpeaker(null);
+                  }}
+                  className="text-white hover:text-neutral-200"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              {/* Date */}
+              {selectedSpeaker.assigned_date && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Date</h4>
+                  <p className="text-neutral-900">
+                    {selectedSpeaker.assigned_date.toDate 
+                      ? selectedSpeaker.assigned_date.toDate().toLocaleDateString('en-US', { 
+                          weekday: 'long', 
+                          year: 'numeric', 
+                          month: 'long', 
+                          day: 'numeric' 
+                        })
+                      : new Date(selectedSpeaker.assigned_date).toLocaleDateString('en-US', { 
+                          weekday: 'long', 
+                          year: 'numeric', 
+                          month: 'long', 
+                          day: 'numeric' 
+                        })
+                    }
+                  </p>
+                </div>
+              )}
+
+              {/* Talk Title */}
+              {selectedSpeaker.talk_title && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Talk Title</h4>
+                  <p className="text-neutral-900 italic">{selectedSpeaker.talk_title}</p>
+                </div>
+              )}
+
+              {/* Abstract */}
+              {selectedSpeaker.talk_abstract && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Abstract</h4>
+                  <p className="text-neutral-800 text-sm leading-relaxed whitespace-pre-wrap">
+                    {selectedSpeaker.talk_abstract}
+                  </p>
+                </div>
+              )}
+
+              {/* Area of Expertise */}
+              {selectedSpeaker.area_of_expertise && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Area of Expertise</h4>
+                  <p className="text-neutral-800">{selectedSpeaker.area_of_expertise}</p>
+                </div>
+              )}
+
+              {/* Country */}
+              {selectedSpeaker.country && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Country</h4>
+                  <p className="text-neutral-800">{selectedSpeaker.country}</p>
+                </div>
+              )}
+
+              {/* Host */}
+              {selectedSpeaker.host && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Host</h4>
+                  <p className="text-neutral-800">{selectedSpeaker.host}</p>
+                </div>
+              )}
+
+              {/* Email */}
+              {selectedSpeaker.email && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Email</h4>
+                  <a 
+                    href={`mailto:${selectedSpeaker.email}`}
+                    className="text-primary hover:underline"
+                  >
+                    {selectedSpeaker.email}
+                  </a>
+                </div>
+              )}
+
+              {/* Speaker URL */}
+              {selectedSpeaker.speaker_url && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Website</h4>
+                  <a 
+                    href={selectedSpeaker.speaker_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline break-all"
+                  >
+                    {selectedSpeaker.speaker_url}
+                  </a>
+                </div>
+              )}
+
+              {/* Notes */}
+              {selectedSpeaker.notes && (
+                <div>
+                  <h4 className="text-sm font-semibold text-neutral-700 mb-1">Notes</h4>
+                  <p className="text-neutral-800 text-sm whitespace-pre-wrap">
+                    {selectedSpeaker.notes}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-6 border-t bg-neutral-50 flex justify-end">
+              <button
+                onClick={() => {
+                  setShowSpeakerModal(false);
+                  setSelectedSpeaker(null);
+                }}
+                className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+  
 
 /* ---------------------
    ManageUsersView
@@ -5480,162 +6971,334 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
    --------------------- */
 
    function AddSpeakerForm({
-    onSubmit,
-    onCancel,
-    seniorFellows,
-    currentUser,
-    countries,
-    availableDates,
-    userAvailability,
-    formatDate
-  }) {
-    const [form, setForm] = useState({
-      full_name: "",
-      email: "",
-      affiliation: "",
-      country: "",
-      area_of_expertise: "",
-      speaker_url: "", // ✅ canonical field name
-      ranking: "Medium Priority",
-      notes: "",
-      host: currentUser?.full_name || "",
-      preferred_date: ""
-    });
-  
-    const [showDateInfo, setShowDateInfo] = useState(false);
-  
-    const getAvailableDatesForHost = (hostName) => {
-      if (!hostName) return [];
-  
-      const hostFellow = seniorFellows.find((f) => f.full_name === hostName);
-  
-      if (!hostFellow) {
-        return (availableDates || [])
-          .filter((d) => d.available && d.locked_by_id !== "DELETED")
-          .sort((a, b) => {
-            const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-            const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-            return dateA - dateB;
-          });
-      }
-  
+  onSubmit,
+  onCancel,
+  seniorFellows,
+  currentUser,
+  countries,
+  availableDates,
+  userAvailability,
+  formatDate,
+  speakers = [], // ✅ NEW
+}) {
+  const [form, setForm] = useState({
+    full_name: "",
+    email: "",
+    affiliation: "",
+    country: "",
+    area_of_expertise: "",
+    speaker_url: "", // ✅ canonical field name
+    ranking: "Medium Priority",
+    notes: "",
+    host: currentUser?.full_name || "",
+    preferred_date: ""
+  });
+
+  // ✅ NEW: search bar state
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // ✅ Helpers for matching
+  const norm = (v) => (v ?? "")
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+  const safeToDate = (d) => {
+    if (!d) return null;
+    try {
+      return d?.toDate ? d.toDate() : new Date(d);
+    } catch {
+      return null;
+    }
+  };
+
+  const getSpeakerUrl = (s) => (s?.speaker_url ?? s?.url ?? "").toString();
+
+  const matches = useMemo(() => {
+  // Helper: check if speaker already spoke in the past
+  const isPastTalk = (s) => {
+    if (s?.status !== "Accepted") return false;
+
+    const dt = safeToDate(s?.assigned_date);
+    if (!dt) return true; // accepted but no date → treat as past
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    dt.setHours(0, 0, 0, 0);
+
+    return dt < today;
+  };
+
+  const q = norm(searchQuery);
+  if (!q || q.length < 2) return [];
+
+  return (speakers || [])
+    .map((s) => {
+      const name = norm(s.full_name);
+      const email = norm(s.email);
+      const affiliation = norm(s.affiliation);
+      const url = norm(getSpeakerUrl(s));
+      const expertise = norm(s.area_of_expertise);
+
+      const hit =
+        name.includes(q) ||
+        email.includes(q) ||
+        affiliation.includes(q) ||
+        url.includes(q) ||
+        expertise.includes(q);
+
+      if (!hit) return null;
+
+      const acceptedPast = isPastTalk(s);
+      const acceptedUpcoming = s.status === "Accepted" && !acceptedPast;
+      const proposed = s.status && s.status !== "Accepted";
+
+      return {
+        ...s,
+        _matchFlags: {
+          acceptedPast,
+          acceptedUpcoming,
+          proposed,
+        },
+      };
+    })
+    .filter(Boolean)
+    // Sort: past talks → upcoming accepted → proposed
+    .sort((a, b) => {
+      const rank = (x) =>
+        x._matchFlags.acceptedPast ? 0 :
+        x._matchFlags.acceptedUpcoming ? 1 :
+        2;
+
+      return rank(a) - rank(b);
+    })
+    .slice(0, 12);
+}, [searchQuery, speakers]);
+const livePossibleDuplicate = useMemo(() => {
+  const n = norm(form.full_name);
+  const e = norm(form.email);
+  const u = norm(form.speaker_url);
+
+  // Nothing meaningful typed yet
+  if (
+    (!n || n.length < 2) &&
+    (!e || e.length < 3) &&
+    (!u || u.length < 5)
+  ) {
+    return [];
+  }
+
+  return (speakers || [])
+    .filter((s) => {
+      const sn = norm(s.full_name);
+      const se = norm(s.email);
+      const su = norm(getSpeakerUrl(s));
+
+      const nameHit =
+        n && sn && (sn === n || sn.includes(n) || n.includes(sn));
+
+      const emailHit = e && se && se === e;
+
+      const urlHit =
+        u && su && (su === u || su.includes(u) || u.includes(su));
+
+      return nameHit || emailHit || urlHit;
+    })
+    .slice(0, 5);
+}, [form.full_name, form.email, form.speaker_url, speakers]);
+
+
+  const getAvailableDatesForHost = (hostName) => {
+    if (!hostName) return [];
+
+    const hostFellow = seniorFellows.find((f) => f.full_name === hostName);
+
+    if (!hostFellow) {
       return (availableDates || [])
-        .filter((d) => {
-          if (!d.available || d.locked_by_id === "DELETED") return false;
-  
-          const hostUnavailable = (userAvailability || []).find(
-            (ua) =>
-              ua.user_id === hostFellow.id &&
-              ua.date_id === d.id &&
-              ua.available === false
-          );
-  
-          return !hostUnavailable;
-        })
+        .filter((d) => d.available && d.locked_by_id !== "DELETED")
         .sort((a, b) => {
           const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
           const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
           return dateA - dateB;
         });
-    };
-  
-    const availableDatesForHost = getAvailableDatesForHost(form.host);
-  
-    const submit = (e) => {
-      e.preventDefault();
-      onSubmit({
-        ...form,
-        speaker_url: form.speaker_url.trim()
+    }
+
+    return (availableDates || [])
+      .filter((d) => {
+        if (!d.available || d.locked_by_id === "DELETED") return false;
+
+        const hostUnavailable = (userAvailability || []).find(
+          (ua) =>
+            ua.user_id === hostFellow.id &&
+            ua.date_id === d.id &&
+            ua.available === false
+        );
+
+        return !hostUnavailable;
+      })
+      .sort((a, b) => {
+        const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+        const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+        return dateA - dateB;
       });
-    };
-  
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
-          <h3 className="text-xl font-semibold mb-4">Propose Speaker</h3>
-  
+  };
+
+  const submit = (e) => {
+    e.preventDefault();
+    onSubmit({
+      ...form,
+      // keep canonical URL storage; handler already normalizes too
+      speaker_url: (form.speaker_url ?? "").trim(),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded shadow w-full max-w-2xl">
+        <div className="p-4 border-b flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Propose a Speaker</h3>
+          <button onClick={onCancel} className="px-3 py-1 border rounded">Close</button>
+        </div>
+
+        <div className="p-4 space-y-4">
+
+          {/* ✅ NEW: Search existing speakers */}
+          <div className="border rounded p-3 bg-neutral-50">
+            <div className="font-medium mb-2">Check if a speaker already exists</div>
+            <input
+              className="w-full border rounded px-3 py-2"
+              placeholder="Search by name, email, affiliation, expertise, or URL…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {matches.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {matches.map((s) => {
+                  const date = safeToDate(s.assigned_date);
+                  const dateLabel = date ? formatDate(date) : null;
+
+                  return (
+                    <div key={s.id} className="bg-white border rounded p-2 flex items-start justify-between">
+                      <div>
+                        <div className="font-semibold">{s.full_name}</div>
+                        <div className="text-sm text-neutral-600">
+                          {s.affiliation}{s.area_of_expertise ? ` • ${s.area_of_expertise}` : ""}
+                        </div>
+                        <div className="text-xs text-neutral-500 mt-1">
+                          Status: <span className="font-medium">{s.status || "Unknown"}</span>
+                          {dateLabel ? ` • Date: ${dateLabel}` : ""}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1 text-xs text-right">
+                        {s._matchFlags?.acceptedPast && (
+                          <span className="px-2 py-1 rounded bg-green-100 text-green-800">Spoke in the past</span>
+                        )}
+                        {s._matchFlags?.acceptedUpcoming && (
+                          <span className="px-2 py-1 rounded bg-blue-100 text-blue-800">Accepted / upcoming</span>
+                        )}
+                        {s._matchFlags?.proposed && (
+                          <span className="px-2 py-1 rounded bg-yellow-100 text-yellow-800">Already proposed</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {searchQuery.trim().length >= 2 && matches.length === 0 && (
+              <div className="mt-2 text-sm text-neutral-500">No matches found.</div>
+            )}
+          </div>
+
+          {/* ✅ NEW: Live duplicate warning while filling the form */}
+          {livePossibleDuplicate.length > 0 && (
+            <div className="border rounded p-3 bg-amber-50">
+              <div className="font-medium text-amber-900 mb-1">Possible duplicate</div>
+              <div className="text-sm text-amber-800">
+                This looks similar to:
+              </div>
+              <ul className="mt-2 list-disc ml-5 text-sm text-amber-900">
+                {livePossibleDuplicate.map((s) => (
+                  <li key={s.id}>
+                    <span className="font-semibold">{s.full_name}</span>
+                    {s.status ? ` — ${s.status}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Existing form (keep your current fields; below is your same structure) */}
           <form onSubmit={submit} className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="text-sm block mb-1">Full name *</label>
+            <div>
+              <label className="text-sm block mb-1">Full Name *</label>
               <input
+                required
                 className="w-full border rounded px-3 py-2"
                 value={form.full_name}
                 onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-                required
               />
             </div>
-  
+
             <div>
-              <label className="text-sm block mb-1">Email *</label>
+              <label className="text-sm block mb-1">Email (optional)</label>
               <input
                 className="w-full border rounded px-3 py-2"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                required
               />
             </div>
-  
+
             <div>
               <label className="text-sm block mb-1">Affiliation *</label>
               <input
+                required
                 className="w-full border rounded px-3 py-2"
                 value={form.affiliation}
                 onChange={(e) => setForm({ ...form, affiliation: e.target.value })}
-                required
               />
             </div>
-  
+
             <div>
               <label className="text-sm block mb-1">Country *</label>
               <select
+                required
                 className="w-full border rounded px-3 py-2"
                 value={form.country}
                 onChange={(e) => setForm({ ...form, country: e.target.value })}
-                required
               >
                 <option value="">-- Select Country --</option>
-                {countries.map((c, idx) =>
-                  c.startsWith("---") ? (
-                    <option key={idx} disabled>
-                      {c}
-                    </option>
-                  ) : (
-                    <option key={idx}>{c}</option>
-                  )
-                )}
+                {countries.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
             </div>
-  
-            <div>
+
+            <div className="col-span-2">
               <label className="text-sm block mb-1">Area of Expertise *</label>
               <input
+                required
                 className="w-full border rounded px-3 py-2"
                 value={form.area_of_expertise}
-                onChange={(e) =>
-                  setForm({ ...form, area_of_expertise: e.target.value })
-                }
-                required
+                onChange={(e) => setForm({ ...form, area_of_expertise: e.target.value })}
               />
             </div>
-  
+
             <div className="col-span-2">
               <label className="text-sm block mb-1">Speaker URL *</label>
               <input
+                required
                 className="w-full border rounded px-3 py-2"
                 value={form.speaker_url}
-                onChange={(e) =>
-                  setForm({ ...form, speaker_url: e.target.value })
-                }
-                placeholder="e.g. lab page, Google Scholar, university profile…"
-                required
+                onChange={(e) => setForm({ ...form, speaker_url: e.target.value })}
+                placeholder="https://..."
               />
-              <div className="text-xs text-gray-500 mt-1">
-                No validation beyond “non-empty”.
-              </div>
             </div>
-  
+
             <div>
-              <label className="text-sm block mb-1">Priority</label>
+              <label className="text-sm block mb-1">Ranking</label>
               <select
                 className="w-full border rounded px-3 py-2"
                 value={form.ranking}
@@ -5646,27 +7309,14 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
                 <option>Low Priority</option>
               </select>
             </div>
-  
-            <div className="col-span-2">
-              <label className="text-sm block mb-1">Notes</label>
-              <textarea
-                className="w-full border rounded px-3 py-2 min-h-[60px]"
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                placeholder="Optional notes about why this speaker should be invited"
-              />
-            </div>
-  
+
             <div>
               <label className="text-sm block mb-1">Host *</label>
               <select
                 required
                 className="w-full border rounded px-3 py-2"
                 value={form.host}
-                onChange={(e) => {
-                  setForm({ ...form, host: e.target.value, preferred_date: "" });
-                  setShowDateInfo(false);
-                }}
+                onChange={(e) => setForm({ ...form, host: e.target.value, preferred_date: "" })}
               >
                 <option value="">-- Select Host --</option>
                 {seniorFellows.map((f) => (
@@ -5676,46 +7326,54 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
                 ))}
               </select>
             </div>
-  
-            <div>
-              <label className="text-sm block mb-1">Preferred Date (optional)</label>
+
+            <div className="col-span-2">
+              <label className="text-sm block mb-1">Preferred date (optional)</label>
               <select
                 className="w-full border rounded px-3 py-2"
                 value={form.preferred_date}
-                onChange={(e) => {
-                  setForm({ ...form, preferred_date: e.target.value });
-                  setShowDateInfo(!!e.target.value);
-                }}
+                onChange={(e) => setForm({ ...form, preferred_date: e.target.value })}
                 disabled={!form.host}
               >
-                <option value="">-- Select Date --</option>
-                {availableDatesForHost.map((d) => (
+                <option value="">-- No preference --</option>
+                {getAvailableDatesForHost(form.host).map((d) => (
                   <option key={d.id} value={d.id}>
-                    {formatDate(d.date)} {d.notes ? `(${d.notes})` : ""}
+                    {formatDate(d.date)}
                   </option>
                 ))}
               </select>
+              {!form.host && (
+                <div className="text-xs text-neutral-500 mt-1">
+                  Select a host to see compatible dates.
+                </div>
+              )}
             </div>
-  
-            {showDateInfo && (
-              <div className="col-span-2 text-sm text-gray-600">
-                Preferred date noted (not a lock).
-              </div>
-            )}
-  
+
+            <div className="col-span-2">
+              <label className="text-sm block mb-1">Notes (optional)</label>
+              <textarea
+                className="w-full border rounded px-3 py-2 min-h-[90px]"
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              />
+            </div>
+
             <div className="col-span-2 flex justify-end gap-2 pt-2">
               <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">
                 Cancel
               </button>
               <button type="submit" className="px-3 py-2 bg-primary text-white rounded">
-                Propose Speaker
+                Submit proposal
               </button>
             </div>
+
           </form>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
+
   
   
   
@@ -5759,6 +7417,205 @@ function AddPastSpeakerForm({ onSubmit, onCancel, seniorFellows, countries }) {
 /* ---------------------
    EditSpeakerForm
    --------------------- */
+
+   /* ---------------------
+   AddConfirmedSpeakerForm - For manually adding confirmed speakers
+   --------------------- */
+function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries, availableDates, formatDate }) {
+  const [form, setForm] = useState({ 
+    full_name: '', 
+    email: '', 
+    affiliation: '', 
+    country: '', 
+    area_of_expertise: '', 
+    host: '', 
+    assigned_date: '', 
+    talk_title: '', 
+    talk_abstract: '',
+    notes: ''
+  });
+
+  const submit = (e) => { 
+    e.preventDefault(); 
+    if (!form.assigned_date) {
+      alert('Please select a precise date for the confirmed speaker.');
+      return;
+    }
+    if (!form.talk_title) {
+      alert('Please enter a talk title for the confirmed speaker.');
+      return;
+    }
+    onSubmit(form); 
+  };
+
+  // Get available dates for display
+  const getAvailableDates = () => {
+    return (availableDates || [])
+      .filter(d => d.available && d.locked_by_id !== 'DELETED')
+      .sort((a, b) => {
+        const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+        const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+        return dateA - dateB;
+      });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <h3 className="text-xl font-semibold mb-4 text-primary">Add Confirmed Speaker</h3>
+        <p className="text-sm text-neutral-600 mb-4">
+          Use this form to manually add a speaker who has already confirmed their participation.
+        </p>
+        
+        <form onSubmit={submit} className="space-y-4">
+          {/* Basic Information */}
+          <div className="border-b pb-4">
+            <h4 className="font-semibold text-neutral-700 mb-3">Basic Information</h4>
+            <div className="grid grid-cols-2 gap-4">
+              <input 
+                className="col-span-2 border rounded px-3 py-2" 
+                placeholder="Full name *" 
+                value={form.full_name} 
+                onChange={e => setForm({ ...form, full_name: e.target.value })} 
+                required 
+              />
+              <input 
+                className="border rounded px-3 py-2" 
+                placeholder="Email" 
+                type="email"
+                value={form.email} 
+                onChange={e => setForm({ ...form, email: e.target.value })} 
+              />
+              <input 
+                className="border rounded px-3 py-2" 
+                placeholder="Affiliation *" 
+                value={form.affiliation} 
+                onChange={e => setForm({ ...form, affiliation: e.target.value })} 
+                required 
+              />
+              <select 
+                className="border rounded px-3 py-2" 
+                value={form.country} 
+                onChange={e => setForm({ ...form, country: e.target.value })} 
+                required
+              >
+                <option value="">-- Country * --</option>
+                {countries.map((c, idx) => c.startsWith('---') ? 
+                  <option key={idx} disabled>{c}</option> : 
+                  <option key={idx}>{c}</option>
+                )}
+              </select>
+              <input 
+                className="border rounded px-3 py-2" 
+                placeholder="Area of expertise *" 
+                value={form.area_of_expertise} 
+                onChange={e => setForm({ ...form, area_of_expertise: e.target.value })} 
+                required 
+              />
+            </div>
+          </div>
+
+          {/* Talk Details */}
+          <div className="border-b pb-4">
+            <h4 className="font-semibold text-neutral-700 mb-3">Talk Details</h4>
+            <div className="space-y-3">
+              <input 
+                className="w-full border rounded px-3 py-2" 
+                placeholder="Talk title *" 
+                value={form.talk_title} 
+                onChange={e => setForm({ ...form, talk_title: e.target.value })} 
+                required 
+              />
+              <textarea 
+                className="w-full border rounded px-3 py-2" 
+                placeholder="Talk abstract *" 
+                rows="4"
+                value={form.talk_abstract} 
+                onChange={e => setForm({ ...form, talk_abstract: e.target.value })} 
+                required
+              />
+            </div>
+          </div>
+
+          {/* Scheduling */}
+          <div className="border-b pb-4">
+            <h4 className="font-semibold text-neutral-700 mb-3">Scheduling</h4>
+            <div className="grid grid-cols-2 gap-4">
+              <select 
+                className="border rounded px-3 py-2" 
+                value={form.host} 
+                onChange={e => setForm({ ...form, host: e.target.value })} 
+                required
+              >
+                <option value="">-- Host * --</option>
+                {seniorFellows.map(f => 
+                  <option key={f.id} value={f.full_name}>
+                    {f.full_name} ({f.role})
+                  </option>
+                )}
+              </select>
+              <div>
+                <input 
+                  type="date" 
+                  className="w-full border rounded px-3 py-2" 
+                  value={form.assigned_date} 
+                  onChange={e => setForm({ ...form, assigned_date: e.target.value })} 
+                  required 
+                />
+                <p className="text-xs text-neutral-500 mt-1">Select the confirmed seminar date</p>
+              </div>
+            </div>
+            
+            {getAvailableDates().length > 0 && (
+              <div className="mt-3 p-3 bg-blue-50 rounded border border-blue-200">
+                <p className="text-sm font-medium text-blue-900 mb-2">Available dates:</p>
+                <div className="text-xs text-blue-700 space-y-1">
+                  {getAvailableDates().slice(0, 5).map(d => (
+                    <div key={d.id}>
+                      {formatDate(d.date)}
+                    </div>
+                  ))}
+                  {getAvailableDates().length > 5 && (
+                    <div className="italic">...and {getAvailableDates().length - 5} more</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Additional Notes */}
+          <div>
+            <h4 className="font-semibold text-neutral-700 mb-3">Additional Notes</h4>
+            <textarea 
+              className="w-full border rounded px-3 py-2" 
+              placeholder="Any additional notes or comments..." 
+              rows="3"
+              value={form.notes} 
+              onChange={e => setForm({ ...form, notes: e.target.value })} 
+            />
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex justify-end gap-2 pt-4">
+            <button 
+              type="button" 
+              onClick={onCancel} 
+              className="px-4 py-2 border rounded hover:bg-neutral-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
+            >
+              Add Confirmed Speaker
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
    function EditSpeakerForm({ speaker, onSubmit, onCancel, seniorFellows, countries }) {
     const [form, setForm] = useState({
       full_name: speaker.full_name || '',
