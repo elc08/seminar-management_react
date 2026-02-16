@@ -21,7 +21,6 @@ import {
   serverTimestamp,
   setDoc,
   deleteDoc,
-  onSnapshot,
   limit
 }
 
@@ -142,7 +141,6 @@ export default function App() {
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [activitySubTab, setActivitySubTab] = useState('overview');
   const [activityLogs, setActivityLogs] = useState([]);
 
   // Domain Data State
@@ -3583,180 +3581,6 @@ function DashboardView({
     );
   }
 
-  function ActivityLogView({ db, allUsers, formatDate }) {
-    const [activity, setActivity] = useState([]);
-    const [loading, setLoading] = useState(true);
-  
-    // Filters
-    const [selectedUserId, setSelectedUserId] = useState('all');
-    const [searchText, setSearchText] = useState('');
-  
-    // Pagination / limit (simple)
-    const [limitCount, setLimitCount] = useState(100);
-  
-    useEffect(() => {
-      setLoading(true);
-  
-      // Base query: latest first
-      // Note: "createdAt" should be serverTimestamp() when logged
-      const baseRef = collection(db, 'activity_log');
-      let q = query(baseRef, orderBy('createdAt', 'desc'), limit(limitCount));
-  
-      // Optional server-side filter by user id (if you store actorId)
-      if (selectedUserId !== 'all') {
-        q = query(
-          baseRef,
-          where('actorId', '==', selectedUserId),
-          orderBy('createdAt', 'desc'),
-          limit(limitCount)
-        );
-      }
-  
-      const unsub = onSnapshot(
-        q,
-        (snap) => {
-          const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          setActivity(items);
-          setLoading(false);
-        },
-        (err) => {
-          console.error('ActivityLogView onSnapshot error:', err);
-          setActivity([]);
-          setLoading(false);
-        }
-      );
-  
-      return () => unsub();
-    }, [db, selectedUserId, limitCount]);
-  
-    const normalized = (s) => (s || '').toLowerCase().trim();
-  
-    // Client-side text search (actor name/email/type/summary)
-    const filtered = activity.filter(a => {
-      const t = normalized(searchText);
-      if (!t) return true;
-  
-      return (
-        normalized(a.actorName).includes(t) ||
-        normalized(a.actorEmail).includes(t) ||
-        normalized(a.type).includes(t) ||
-        normalized(a.summary).includes(t) ||
-        normalized(a.targetType).includes(t)
-      );
-    });
-  
-    const renderTypeBadge = (type) => {
-      const base = "px-2 py-1 rounded-full text-xs font-semibold";
-      switch (type) {
-        case 'speaker_proposed':
-          return <span className={`${base} bg-blue-100 text-blue-800`}>Speaker proposed</span>;
-        case 'speaker_edited':
-          return <span className={`${base} bg-amber-100 text-amber-800`}>Speaker edited</span>;
-        case 'speaker_invited':
-          return <span className={`${base} bg-green-100 text-green-800`}>Speaker invited</span>;
-        case 'availability_updated':
-          return <span className={`${base} bg-purple-100 text-purple-800`}>Availability updated</span>;
-        case 'date_updated':
-          return <span className={`${base} bg-neutral-100 text-neutral-800`}>Date updated</span>;
-        default:
-          return <span className={`${base} bg-neutral-100 text-neutral-700`}>{type || 'unknown'}</span>;
-      }
-    };
-  
-    const formatWhen = (a) => {
-      // createdAt may be Firestore Timestamp
-      const d = safeToDate(a.createdAt);
-      if (!d) return '—';
-      return d.toLocaleString();
-    };
-  
-    return (
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-xl font-semibold text-neutral-800">Activity Log</h2>
-            <div className="text-sm text-neutral-500">
-              Latest actions across the app (Organizer-only)
-            </div>
-          </div>
-  
-          <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-1 rounded text-sm bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-              onClick={() => setLimitCount(v => Math.min(v + 100, 500))}
-              title="Load more"
-            >
-              Load more
-            </button>
-          </div>
-        </div>
-  
-        {/* Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-          <div>
-            <label className="text-sm text-neutral-600 block mb-1">Filter by user</label>
-            <select
-              value={selectedUserId}
-              onChange={(e) => setSelectedUserId(e.target.value)}
-              className="w-full border rounded px-3 py-2 bg-white"
-            >
-              <option value="all">All users</option>
-              {(allUsers || []).map(u => (
-                <option key={u.id} value={u.id}>
-                  {u.full_name} ({u.role})
-                </option>
-              ))}
-            </select>
-          </div>
-  
-          <div className="md:col-span-2">
-            <label className="text-sm text-neutral-600 block mb-1">Search</label>
-            <input
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              className="w-full border rounded px-3 py-2"
-              placeholder="Search by actor, email, type, summary…"
-            />
-          </div>
-        </div>
-  
-        {/* Content */}
-        {loading ? (
-          <div className="text-neutral-600">Loading activity…</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-neutral-500">No activity found for these filters.</div>
-        ) : (
-          <div className="space-y-2">
-            {filtered.map(a => (
-              <div key={a.id} className="border rounded-lg p-3 hover:border-primary transition-colors">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {renderTypeBadge(a.type)}
-                      <span className="text-sm text-neutral-600">
-                        <strong>{a.actorName || 'Unknown user'}</strong>
-                        {a.actorEmail ? <span className="text-neutral-400"> • {a.actorEmail}</span> : null}
-                      </span>
-                    </div>
-  
-                    <div className="text-sm text-neutral-700 mt-2">
-                      {a.summary || '(no summary)'}
-                    </div>
-  
-                    <div className="text-xs text-neutral-500 mt-2">
-                      {formatWhen(a)}
-                      {a.targetType ? <span> • target: {a.targetType}</span> : null}
-                      {a.targetId ? <span> • id: {a.targetId}</span> : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
 
   /* ---------------------
    FellowsAvailabilityView - For organizers to see all fellows' availability
