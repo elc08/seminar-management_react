@@ -96,6 +96,82 @@ const isValidUrl = (raw) => {
 };
 
 
+// ---------- Email text helpers ----------
+// Email texts are written as indented template literals in this file; this removes
+// that indentation, trims the ends and keeps at most one blank line between paragraphs.
+const cleanEmailText = (text) =>
+  String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+const escapeHtml = (str) =>
+  str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// Formatted version for rich email editors (Gmail, Outlook, Apple Mail): line breaks as
+// <br> so they survive pasting, and links made clickable.
+const emailTextToHtml = (text) =>
+  '<div>' +
+  escapeHtml(cleanEmailText(text))
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>')
+    .replace(/\n/g, '<br>') +
+  '</div>';
+
+// Copies an email text so it pastes correctly everywhere: formatted (HTML) for rich
+// editors, plain text for everything else. Returns true when the copy worked.
+const copyEmailText = async (text) => {
+  const plain = cleanEmailText(text);
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      await navigator.clipboard.write([
+        new window.ClipboardItem({
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+          'text/html': new Blob([emailTextToHtml(plain)], { type: 'text/html' }),
+        }),
+      ]);
+      return true;
+    }
+  } catch (err) {
+    // Some browsers refuse HTML on the clipboard; fall back to plain text below
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(plain);
+      return true;
+    }
+  } catch (err) {
+    // fall through to the legacy method
+  }
+  const textArea = document.createElement('textarea');
+  textArea.value = plain;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  document.body.appendChild(textArea);
+  textArea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (err) {
+    ok = false;
+  }
+  document.body.removeChild(textArea);
+  return ok;
+};
+
+// mailto: link with line breaks encoded as CRLF (%0D%0A), which Outlook needs to keep them
+const buildMailto = ({ to = '', cc = '', subject = '', body = '' }) => {
+  const enc = (v) => encodeURIComponent(v).replace(/%0A/g, '%0D%0A');
+  const params = [];
+  if (cc) params.push(`cc=${encodeURIComponent(cc)}`);
+  if (subject) params.push(`subject=${encodeURIComponent(subject)}`);
+  if (body) params.push(`body=${enc(cleanEmailText(body))}`);
+  return `mailto:${to}${params.length ? '?' + params.join('&') : ''}`;
+};
+
+
 // Image processing helper: center-crop to target aspect and downscale.
 // Returns a data URL (JPEG) for lightweight storage.
 const processImageFile = (file, { targetWidth, targetHeight, quality = 0.7 } = {}) => {
@@ -1117,7 +1193,7 @@ const handleAddSpeaker = async (formData) => {
         });
         
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${formData.role}`;
-        const emailBody = `Dear ${formData.full_name},
+        const emailBody = cleanEmailText(`Dear ${formData.full_name},
     
     You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${formData.role}.
     
@@ -1129,7 +1205,7 @@ const handleAddSpeaker = async (formData) => {
     This invitation will remain valid for 30 days.
     
     Best regards,
-    ${userRole.full_name}`;
+    ${userRole.full_name}`);
     
         setInvitationData({
           email: formData.email,
@@ -1167,7 +1243,7 @@ const handleAddSpeaker = async (formData) => {
         const invitation = { id: invDoc.id, ...invDoc.data() };
         
         const emailSubject = `Invitation to Join Collaboratorium Barcelona as ${invitation.role}`;
-        const emailBody = `Dear ${invitation.full_name},
+        const emailBody = cleanEmailText(`Dear ${invitation.full_name},
     
     You have been invited to join the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona as a ${invitation.role}.
     
@@ -1179,7 +1255,7 @@ const handleAddSpeaker = async (formData) => {
     This invitation will remain valid for 30 days.
     
     Best regards,
-    ${userRole.full_name}`;
+    ${userRole.full_name}`);
     
         setInvitationData({
           email: invitation.email,
@@ -1276,7 +1352,7 @@ const handleAddSpeaker = async (formData) => {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      setPasswordResetUser({ email, userName, link: data.link });
+      setPasswordResetUser({ email, userName, link: data.link, warning: data.warning });
     } catch (err) {
       console.error('Password reset failed:', err);
       setPasswordResetUser({ email, userName, error: err.message });
@@ -1879,6 +1955,11 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
                     ✅ Reset link created for <strong>{passwordResetUser.email}</strong>. Send it only to this user.
                     It expires after about an hour and can be used once.
                   </div>
+                  {passwordResetUser.warning && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded p-3 mb-4 text-xs">
+                      {passwordResetUser.warning}
+                    </div>
+                  )}
                   <label className="text-sm text-neutral-600">Reset link</label>
                   <div className="flex gap-2 mb-4">
                     <input readOnly value={passwordResetUser.link} className="flex-1 border rounded px-2 py-1 text-xs font-mono" onFocus={e => e.target.select()} />
@@ -1898,8 +1979,8 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
                     <button
                       onClick={async () => {
                         try {
-                          await navigator.clipboard.writeText(resetFollowUpText(passwordResetUser.userName, passwordResetUser.link));
-                          alert('Message copied to clipboard!');
+                          const ok = await copyEmailText(resetFollowUpText(passwordResetUser.userName, passwordResetUser.link));
+                          alert(ok ? 'Message copied to clipboard!' : 'Could not copy. Please select the text and copy it manually.');
                         } catch (err) {
                           console.error('Copy failed:', err);
                         }
@@ -1911,7 +1992,7 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
                     <button
                       onClick={() => {
                         const subject = 'Password Reset - Barcelona Collaboratorium';
-                        window.location.href = `mailto:${passwordResetUser.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(resetFollowUpText(passwordResetUser.userName, passwordResetUser.link))}`;
+                        window.location.href = buildMailto({ to: passwordResetUser.email, subject, body: resetFollowUpText(passwordResetUser.userName, passwordResetUser.link) });
                       }}
                       className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
                     >
@@ -1965,8 +2046,8 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
                 <button
                   onClick={async () => {
                     try {
-                      await navigator.clipboard.writeText(invitationData.body);
-                      alert('Message copied to clipboard!');
+                      const ok = await copyEmailText(invitationData.body);
+                      alert(ok ? 'Message copied to clipboard!' : 'Could not copy. Please select the text and copy it manually.');
                     } catch (err) {
                       console.error('Copy failed:', err);
                     }
@@ -1990,7 +2071,7 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
                 </button>
                 <button
                   onClick={() => {
-                    window.location.href = `mailto:${invitationData.email}?subject=${encodeURIComponent(invitationData.subject)}&body=${encodeURIComponent(invitationData.body)}`;
+                    window.location.href = buildMailto({ to: invitationData.email, subject: invitationData.subject, body: invitationData.body });
                   }}
                   className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
                 >
@@ -2215,7 +2296,7 @@ function MobileTabBar({ navItems, activeTab, onSelect, showMore, onToggleMore, u
    LoginView & SignupView
    --------------------- */
 function resetFollowUpText(userName, link) {
-  return `Dear ${userName || ''},
+  return cleanEmailText(`Dear ${userName || ''},
 
 Here is your link to reset your password for the Barcelona Collaboratorium:
 
@@ -2226,7 +2307,7 @@ The link can be used once and expires in about an hour. After choosing a new pas
 If the link has expired, just reply to this message and we'll send you a new one.
 
 Best regards,
-Barcelona Collaboratorium Team`;
+Barcelona Collaboratorium Team`);
 }
 
 function LoginView({ onLogin }) {
@@ -5915,7 +5996,7 @@ function ProfileView({ userRole, onEditProfile }) {
     const inviteLink = `${window.location.origin}?token=${speaker.access_token}`;
     const emailSubject = 'Invitation to Present at Collaboratorium Barcelona';
 
-    const emailBody = `Dear ${speaker.full_name},
+    const emailBody = cleanEmailText(`Dear ${speaker.full_name},
 
     We are delighted to invite you to present a seminar at the Collaboratorium for Theoretical Modelling and Predictive Biology in Barcelona.
 
@@ -5927,7 +6008,7 @@ function ProfileView({ userRole, onEditProfile }) {
     This invitation will remain valid for 14 days. If you have any questions, please don't hesitate to reach out.
 
     Best regards,
-    ${currentUser.full_name}`;
+    ${currentUser.full_name}`);
   
     const actions = speaker.actions || [];
     
@@ -5984,7 +6065,7 @@ function ProfileView({ userRole, onEditProfile }) {
       
       if (action.type === 'travel_arrangements') {
         const seminarDate = speaker.assigned_date ? formatDate(speaker.assigned_date) : '[seminar date]';
-        const travelEmailBody = `Dear ${speaker.full_name},
+        const travelEmailBody = cleanEmailText(`Dear ${speaker.full_name},
   
   I hope this email finds you well.
   We are delighted that you will be giving a seminar at the Barcelona Collaboratorium on ${seminarDate}.
@@ -5998,7 +6079,7 @@ function ProfileView({ userRole, onEditProfile }) {
   We look forward to welcoming you in Barcelona.
   
   Best regards,
-  ${currentUser.full_name}`;
+  ${currentUser.full_name}`);
   
         return (
           <div style={styles.actionCardContent}>
@@ -6012,7 +6093,7 @@ function ProfileView({ userRole, onEditProfile }) {
             <div style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
               <button
                 onClick={() => {
-                  const mailtoLink = `mailto:${speaker.email}?subject=${encodeURIComponent('Travel Arrangements - Barcelona Collaboratorium Seminar')}&body=${encodeURIComponent(travelEmailBody)}`;
+                  const mailtoLink = buildMailto({ to: speaker.email, subject: 'Travel Arrangements - Barcelona Collaboratorium Seminar', body: travelEmailBody });
                   window.location.href = mailtoLink;
                 }}
                 style={styles.sendEmailBtn}
@@ -6023,23 +6104,10 @@ function ProfileView({ userRole, onEditProfile }) {
               <button
                 onClick={async () => {
                   try {
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                      await navigator.clipboard.writeText(travelEmailBody);
+                    if (await copyEmailText(travelEmailBody)) {
                       alert('Message copied to clipboard!');
                     } else {
-                      const textArea = document.createElement('textarea');
-                      textArea.value = travelEmailBody;
-                      textArea.style.position = 'fixed';
-                      textArea.style.left = '-999999px';
-                      document.body.appendChild(textArea);
-                      textArea.select();
-                      try {
-                        document.execCommand('copy');
-                        alert('Message copied to clipboard!');
-                      } catch (err) {
-                        alert('Failed to copy text. Please copy manually.');
-                      }
-                      document.body.removeChild(textArea);
+                      alert('Failed to copy text. Please copy manually.');
                     }
                   } catch (err) {
                     console.error('Copy failed:', err);
@@ -6207,7 +6275,7 @@ function ProfileView({ userRole, onEditProfile }) {
                                 
                                 const ccEmails = Array.from(ccEmailsSet).join(',');
                                 
-                                const mailtoLink = `mailto:${speaker.email}?cc=${encodeURIComponent(ccEmails)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+                                const mailtoLink = buildMailto({ to: speaker.email, cc: ccEmails, subject: emailSubject, body: emailBody });
                                 window.location.href = mailtoLink;
                               }}
                               style={styles.sendEmailBtn}
@@ -6218,24 +6286,11 @@ function ProfileView({ userRole, onEditProfile }) {
                             <button
                               onClick={async () => {
                                 try {
-                                  if (navigator.clipboard && navigator.clipboard.writeText) {
-                                    await navigator.clipboard.writeText(emailBody);
-                                    alert('Message copied to clipboard!');
-                                  } else {
-                                    const textArea = document.createElement('textarea');
-                                    textArea.value = emailBody;
-                                    textArea.style.position = 'fixed';
-                                    textArea.style.left = '-999999px';
-                                    document.body.appendChild(textArea);
-                                    textArea.select();
-                                    try {
-                                      document.execCommand('copy');
-                                      alert('Message copied to clipboard!');
-                                    } catch (err) {
-                                      alert('Failed to copy text. Please copy manually.');
-                                    }
-                                    document.body.removeChild(textArea);
-                                  }
+                                  if (await copyEmailText(emailBody)) {
+                      alert('Message copied to clipboard!');
+                    } else {
+                      alert('Failed to copy text. Please copy manually.');
+                    }
                                 } catch (err) {
                                   console.error('Copy failed:', err);
                                   alert('Failed to copy text. Please copy manually.');
@@ -6502,7 +6557,7 @@ function ProfileView({ userRole, onEditProfile }) {
                       if (email) {
                         const subject = `Calendar for your visit to Barcelona`;
                         const body = `Please find attached your visit calendar. You can import the attached .ics file into your calendar application (Google Calendar, Outlook, etc.).\n\nLooking forward to your visit!\n\nBest regards,\n${currentUser.full_name}`;
-                        window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                        window.location.href = buildMailto({ to: email, subject, body });
                       }
                       setShareMenuOpen(false);
                     }}
