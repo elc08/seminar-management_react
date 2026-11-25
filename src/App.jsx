@@ -38,7 +38,7 @@ import {
   Tooltip,
   ResponsiveContainer
 } from 'recharts';
-import { X, CheckCircle, Mail, Plane, Send } from 'lucide-react';
+import { X, CheckCircle, Mail, Plane, Send, House, UserPlus, CalendarCheck, Ellipsis, LogOut, History } from 'lucide-react';
 
 /* ============================================================
    Constants, helpers & theme notes
@@ -65,13 +65,34 @@ const COUNTRIES = [
 const generateToken = () => Math.random().toString(36).substring(2) + Date.now().toString(36);
 
 // URL helpers (speaker proposals require a URL)
+// Cleans up URLs as people typically paste them: surrounding spaces/quotes/<>,
+// missing "https://", "http//" typos, invisible characters, trailing punctuation.
 const normalizeUrl = (raw) => {
   if (!raw) return '';
-  const trimmed = String(raw).trim();
-  if (!trimmed) return '';
-  // If user entered without protocol, default to https
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
+  let u = String(raw)
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '') // zero-width / non-breaking spaces
+    .trim()
+    .replace(/^[<"'([\u201C\u2018]+|[>"')\],.;\u201D\u2019]+$/g, '') // wrapping brackets/quotes, trailing punctuation
+    .trim();
+  if (!u) return '';
+  u = u.replace(/^(https?)\/\/?(?!\/)/i, '$1://'); // "https//x" or "https:/x" -> "https://x"
+  u = u.replace(/^(https?):\/(?!\/)/i, '$1://');
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = `https://${u.replace(/^\/+/, '')}`;
+  // Spaces inside the path (common when copying) -> %20; spaces in the domain stay invalid
+  u = u.replace(/^([a-z]+:\/\/[^/\s]+)(\/.*)$/i, (m, host, path) => host + path.replace(/ /g, '%20'));
+  return u;
+};
+
+// True if the (normalized) URL looks like a real web address.
+const isValidUrl = (raw) => {
+  const u = normalizeUrl(raw);
+  if (!u || /\s/.test(u)) return false;
+  try {
+    const parsed = new URL(u);
+    return /^https?:$/.test(parsed.protocol) && /\.[a-z]{2,}$/i.test(parsed.hostname);
+  } catch {
+    return false;
+  }
 };
 
 
@@ -179,6 +200,7 @@ export default function App() {
   const [loadingSignup, setLoadingSignup] = useState(false);
 
   const [showPasswordResetPanel, setShowPasswordResetPanel] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false); // phone "More" sheet
   const [passwordResetUser, setPasswordResetUser] = useState(null);
   const [showInvitationPanel, setShowInvitationPanel] = useState(false);
   const [invitationData, setInvitationData] = useState(null);
@@ -576,9 +598,13 @@ const handleAddSpeaker = async (formData) => {
       alert("URL is compulsory.");
       return;
     }
+    if (!isValidUrl(rawUrl)) {
+      alert(`"${rawUrl}" doesn't look like a valid web address.\nExample: https://www.university.edu/people/jane-doe`);
+      return;
+    }
 
     const token = generateToken();
-    const cleanData = { ...formData, speaker_url: rawUrl };
+    const cleanData = { ...formData, speaker_url: normalizeUrl(rawUrl) };
     delete cleanData.url;
 
     const actor = buildActor({ user, userRole });
@@ -876,8 +902,12 @@ const handleAddSpeaker = async (formData) => {
         alert("URL is compulsory.");
         return;
       }
+      if (!isValidUrl(rawUrl)) {
+        alert(`"${rawUrl}" doesn't look like a valid web address.\nExample: https://www.university.edu/people/jane-doe`);
+        return;
+      }
   
-      const cleanData = { ...formData, speaker_url: rawUrl };
+      const cleanData = { ...formData, speaker_url: normalizeUrl(rawUrl) };
       delete cleanData.url;
   
       const actor = buildActor({ user, userRole });
@@ -1233,8 +1263,24 @@ const handleAddSpeaker = async (formData) => {
     }
   };
 
+  // Asks our server (/api/password-reset-link) for a reset link.
+  // The server checks that the signed-in user is an Organizer before creating it.
   const handlePasswordReset = async (email, userName) => {
-    setPasswordResetUser({ email, userName });
+    if (!window.confirm(`Generate a password reset link for ${email}?`)) return;
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      const res = await fetch('/api/password-reset-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      setPasswordResetUser({ email, userName, link: data.link });
+    } catch (err) {
+      console.error('Password reset failed:', err);
+      setPasswordResetUser({ email, userName, error: err.message });
+    }
     setShowPasswordResetPanel(true);
   };
 
@@ -1516,17 +1562,35 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
   }
 
   /* ============================================================
+     Navigation items (shared by the desktop side menu and phone tab bar)
+     ============================================================ */
+  const role = userRole?.role;
+  const canSetAvailability = role === 'Fellow' || role === 'Senior Fellow' || role === 'Organizer';
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', short: 'Home', icon: House },
+    { id: 'statistics', label: 'Past Speakers', short: 'Past', icon: History },
+    canSetAvailability && { id: 'availability', label: 'My Availability', short: 'Availability', icon: CalendarCheck },
+    role === 'Organizer' && { id: 'dates', label: 'Available Dates' },
+    (role === 'Organizer' || role === 'Senior Fellow') && { id: 'propose', label: 'Propose Speaker', short: 'Propose', icon: UserPlus },
+    role === 'Organizer' && { id: 'users', label: 'Manage Users' },
+    role === 'Organizer' && { id: 'invitations', label: 'User Invitations' },
+    role === 'Organizer' && { id: 'fellows-activity', label: 'Fellows Activity' },
+    { id: 'profile', label: 'My Profile' },
+  ].filter(Boolean);
+  const sidePanelOpen = (showSidebar && !!sidebarSpeaker) || (showPosterSidebar && !!posterSpeaker);
+
+  /* ============================================================
      Main layout
      ============================================================ */
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-800">
-      {/* Header */}
-      <header className="bg-primary-dark text-white px-6 py-4 flex items-center justify-between shadow">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold">Seminar Management System</h1>
-          <span className="text-sm text-neutral-200">Collaboratorium Barcelona</span>
+      {/* Header: compact and sticky on phones, unchanged on computers */}
+      <header className="bg-primary-dark text-white px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between shadow sticky top-0 z-30 xl:static">
+        <div className="flex items-center gap-4 min-w-0">
+          <h1 className="text-lg sm:text-xl font-semibold truncate">Seminar Management<span className="hidden sm:inline"> System</span></h1>
+          <span className="hidden md:inline text-sm text-neutral-200">Collaboratorium Barcelona</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="hidden sm:flex items-center gap-3">
           <div className="text-sm">
             {userRole?.full_name} <span className="text-neutral-300">({userRole?.role})</span>
           </div>
@@ -1534,32 +1598,17 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
         </div>
       </header>
 
-      {/* Main container with max-width */}
-      <div className="flex max-w-[1600px] mx-auto h-[calc(100vh-64px)] overflow-hidden">
-        {/* Left nav - REDUCED */}
-        <nav className="w-56 bg-white border-r p-4 space-y-2 min-h-screen">
-        <NavButton label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <NavButton label="Past Speakers" active={activeTab === 'statistics'} onClick={() => setActiveTab('statistics')} />
-          {(userRole?.role === 'Fellow' || userRole?.role === 'Senior Fellow' || userRole?.role === 'Organizer') && (
-            <NavButton label="My Availability" active={activeTab === 'availability'} onClick={() => setActiveTab('availability')} />
-          )}
-          {userRole?.role === 'Organizer' && (
-            <>
-              <NavButton label="Available Dates" active={activeTab === 'dates'} onClick={() => setActiveTab('dates')} />
-              <NavButton label="Propose Speaker" active={activeTab === 'propose'} onClick={() => setActiveTab('propose')} />
-              <NavButton label="Manage Users" active={activeTab === 'users'} onClick={() => setActiveTab('users')} />
-              <NavButton label="User Invitations" active={activeTab === 'invitations'} onClick={() => setActiveTab('invitations')} />
-              <NavButton label="Fellows Activity" active={activeTab === 'fellows-activity'} onClick={() => setActiveTab('fellows-activity')} />
-            </>
-          )}
-          {userRole?.role === 'Senior Fellow' && (
-            <NavButton label="Propose Speaker" active={activeTab === 'propose'} onClick={() => setActiveTab('propose')} />
-          )}
-          <NavButton label="My Profile" active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} />
+      {/* Main container: three panels on computers (xl+), single column on phones/tablets */}
+      <div className="max-w-[1600px] mx-auto xl:flex xl:h-[calc(100vh-64px)] xl:overflow-hidden">
+        {/* Left nav (computers only; phones use the bottom tab bar) */}
+        <nav className="hidden xl:block w-56 shrink-0 bg-white border-r p-4 space-y-2 min-h-screen">
+          {navItems.map(item => (
+            <NavButton key={item.id} label={item.label} active={activeTab === item.id} onClick={() => setActiveTab(item.id)} />
+          ))}
         </nav>
 
         {/* Main content - with flex-1 but constrained by parent max-width */}
-        <main className="flex-1 p-6 space-y-6 overflow-y-auto">
+        <main className="xl:flex-1 min-w-0 p-3 sm:p-6 space-y-4 sm:space-y-6 xl:overflow-y-auto">
         {activeTab === 'dashboard' && (
           <DashboardView
             userRole={userRole}
@@ -1667,9 +1716,19 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
         </main>
 
         {/* Right panel - with full height */}
-        <aside className="w-[425px] border-l bg-white p-4 overflow-y-auto space-y-4">
+        {/* Right panel: side column on computers. On phones the calendar sits below the
+            dashboard, and the Actions/Poster panels open full screen. */}
+        <aside
+          className={`${
+            sidePanelOpen
+              ? 'fixed inset-0 z-40 overflow-y-auto bg-white p-4 pb-24'
+              : activeTab === 'dashboard' ? 'block px-3 sm:px-6 pb-4' : 'hidden'
+          } space-y-4 xl:static xl:z-auto xl:block xl:w-[425px] xl:shrink-0 xl:border-l xl:bg-white xl:p-4 xl:overflow-y-auto`}
+        >
           {activeTab === "dashboard" && (
-            <LockedSpeakersMiniCalendar dates={availableDates} speakers={speakers} />
+            <div className={sidePanelOpen ? 'hidden xl:block' : ''}>
+              <LockedSpeakersMiniCalendar dates={availableDates} speakers={speakers} />
+            </div>
           )}
 
           {showSidebar && sidebarSpeaker && (
@@ -1694,6 +1753,17 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
           )}
         </aside>
       </div>
+
+      {/* Phone/tablet bottom tab bar */}
+      <MobileTabBar
+        navItems={navItems}
+        activeTab={activeTab}
+        onSelect={(id) => { setActiveTab(id); setShowMoreMenu(false); setShowSidebar(false); setShowPosterSidebar(false); window.scrollTo(0, 0); }}
+        showMore={showMoreMenu}
+        onToggleMore={() => setShowMoreMenu(v => !v)}
+        userRole={userRole}
+        onLogout={handleLogout}
+      />
 
       {/* Modals & Forms */}
       {showAddDateForm && <AddDateForm onSubmit={handleAddDate} onCancel={() => setShowAddDateForm(false)} existingDates={availableDates} formatDate={formatDate} />}
@@ -1737,7 +1807,7 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
       
       {/* Agenda Modal - ADD THIS */}
       {showAgendaSidebar && selectedAgenda && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
             <AgendaSidebar
               agenda={selectedAgenda}
@@ -1788,8 +1858,8 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
       
       {/* Password Reset Panel */}
       {showPasswordResetPanel && passwordResetUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
               <h3 className="text-xl font-semibold">Password Reset Instructions</h3>
               <button 
@@ -1803,76 +1873,57 @@ const updateDocWithActivity = async ({ db, docRef, data, activity }) => {
               </button>
             </div>
             <div className="p-6">
-              <div className="bg-neutral-50 rounded-lg p-4 mb-4">
-                <p className="text-sm text-neutral-600 mb-2">
-                  <strong>To:</strong> {passwordResetUser.email}
-                </p>
-                <p className="text-sm text-neutral-600 mb-4">
-                  <strong>Subject:</strong> Password Reset - Barcelona Collaboratorium
-                </p>
-                <div className="bg-white border rounded p-4 text-sm leading-relaxed">
-                  <p className="mb-3">Dear {passwordResetUser.userName},</p>
-                  <p className="mb-3">
-                    You have requested a password reset for your Barcelona Collaboratorium account.
-                  </p>
-                  <p className="mb-3">
-                    Please contact the system administrator at [admin email] to reset your password, 
-                    or visit the login page and use the "Forgot Password" link.
-                  </p>
-                  <p className="mb-3">
-                    If you did not request this reset, please ignore this message.
-                  </p>
-                  <p>
-                    Best regards,<br />
-                    Barcelona Collaboratorium Team
-                  </p>
+              {passwordResetUser.link ? (
+                <>
+                  <div className="bg-green-50 border border-green-200 text-green-800 rounded p-4 mb-4 text-sm">
+                    ✅ Reset link created for <strong>{passwordResetUser.email}</strong>. Send it only to this user.
+                    It expires after about an hour and can be used once.
+                  </div>
+                  <label className="text-sm text-neutral-600">Reset link</label>
+                  <div className="flex gap-2 mb-4">
+                    <input readOnly value={passwordResetUser.link} className="flex-1 border rounded px-2 py-1 text-xs font-mono" onFocus={e => e.target.select()} />
+                    <button
+                      onClick={async () => {
+                        try { await navigator.clipboard.writeText(passwordResetUser.link); alert('Link copied!'); }
+                        catch (err) { console.error('Copy failed:', err); }
+                      }}
+                      className="px-3 py-1 bg-neutral-700 text-white rounded text-sm"
+                    >Copy link</button>
+                  </div>
+                  <p className="text-sm text-neutral-600 mb-2">Message to the user:</p>
+                  <div className="bg-white border rounded p-4 text-sm leading-relaxed whitespace-pre-line mb-4 break-all">
+                    {resetFollowUpText(passwordResetUser.userName, passwordResetUser.link)}
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(resetFollowUpText(passwordResetUser.userName, passwordResetUser.link));
+                          alert('Message copied to clipboard!');
+                        } catch (err) {
+                          console.error('Copy failed:', err);
+                        }
+                      }}
+                      className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
+                    >
+                      📋 Copy Message
+                    </button>
+                    <button
+                      onClick={() => {
+                        const subject = 'Password Reset - Barcelona Collaboratorium';
+                        window.location.href = `mailto:${passwordResetUser.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(resetFollowUpText(passwordResetUser.userName, passwordResetUser.link))}`;
+                      }}
+                      className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                    >
+                      📧 Open Email Client
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="bg-red-50 border border-red-200 text-red-800 rounded p-4 text-sm">
+                  ❌ Could not create a reset link for <strong>{passwordResetUser.email}</strong>: {passwordResetUser.error}
                 </div>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={async () => {
-                    const text = `Dear ${passwordResetUser.userName},
-
-You have requested a password reset for your Barcelona Collaboratorium account.
-
-Please contact the system administrator to reset your password, or visit the login page and use the "Forgot Password" link.
-
-If you did not request this reset, please ignore this message.
-
-Best regards,
-Barcelona Collaboratorium Team`;
-                    
-                    try {
-                      await navigator.clipboard.writeText(text);
-                      alert('Message copied to clipboard!');
-                    } catch (err) {
-                      console.error('Copy failed:', err);
-                    }
-                  }}
-                  className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/80"
-                >
-                  📋 Copy Message
-                </button>
-                <button
-                  onClick={() => {
-                    const subject = 'Password Reset - Barcelona Collaboratorium';
-                    const body = `Dear ${passwordResetUser.userName},
-
-You have requested a password reset for your Barcelona Collaboratorium account.
-
-Please contact the system administrator to reset your password, or visit the login page and use the "Forgot Password" link.
-
-If you did not request this reset, please ignore this message.
-
-Best regards,
-Barcelona Collaboratorium Team`;
-                    window.location.href = `mailto:${passwordResetUser.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-                  }}
-                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                >
-                  📧 Open Email Client
-                </button>
-              </div>
+              )}
             </div>
           </div>
         </div>
@@ -1880,8 +1931,8 @@ Barcelona Collaboratorium Team`;
 
       {/* Invitation Panel */}
       {showInvitationPanel && invitationData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
               <h3 className="text-xl font-semibold">User Invitation</h3>
               <button 
@@ -1972,6 +2023,86 @@ function NavButton({ label, active, onClick }) {
   );
 }
 
+/* ---------------------
+   MobileTabBar: bottom navigation for phones and tablets (hidden on computers).
+   Shows the most-used sections as tabs; everything else goes in "More".
+   --------------------- */
+function MobileTabBar({ navItems, activeTab, onSelect, showMore, onToggleMore, userRole, onLogout }) {
+  // Priority order for tabs: Home, Propose, Availability, then Past Speakers as a filler
+  const priority = ['dashboard', 'propose', 'availability', 'statistics'];
+  const tabs = priority
+    .map(id => navItems.find(n => n.id === id))
+    .filter(Boolean)
+    .slice(0, 3);
+  const moreItems = navItems.filter(n => !tabs.includes(n));
+  const moreActive = moreItems.some(n => n.id === activeTab);
+
+  const tabClass = (active) =>
+    `flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium ${
+      active ? 'text-primary-dark' : 'text-neutral-500'
+    }`;
+
+  return (
+    <>
+      {/* Spacer so content isn't hidden behind the bar */}
+      <div className="h-20 xl:hidden" aria-hidden="true" />
+
+      {showMore && (
+        <div className="fixed inset-0 z-40 xl:hidden" onClick={onToggleMore}>
+          <div className="absolute inset-0 bg-black/40" />
+          <div
+            className="absolute inset-x-0 bottom-0 bg-white rounded-t-2xl shadow-xl pb-[calc(5rem+env(safe-area-inset-bottom))]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-4 pb-3 border-b">
+              <div className="font-semibold text-neutral-800">{userRole?.full_name}</div>
+              <div className="text-sm text-neutral-500">{userRole?.role}</div>
+            </div>
+            <div className="py-2">
+              {moreItems.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => onSelect(item.id)}
+                  className={`w-full text-left px-5 py-3 text-base ${
+                    activeTab === item.id ? 'text-primary-dark font-semibold bg-primary/10' : 'text-neutral-700 active:bg-neutral-100'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <button
+                onClick={onLogout}
+                className="w-full text-left px-5 py-3 text-base text-red-600 flex items-center gap-2 border-t mt-2"
+              >
+                <LogOut size={18} /> Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="fixed bottom-0 inset-x-0 z-40 xl:hidden bg-white border-t shadow-[0_-2px_8px_rgba(0,0,0,0.06)] pb-[env(safe-area-inset-bottom)]">
+        <div className="flex max-w-xl mx-auto">
+          {tabs.map(item => {
+            const Icon = item.icon;
+            const active = activeTab === item.id && !showMore;
+            return (
+              <button key={item.id} onClick={() => onSelect(item.id)} className={tabClass(active)}>
+                <Icon size={22} strokeWidth={active ? 2.4 : 1.8} />
+                {item.short || item.label}
+              </button>
+            );
+          })}
+          <button onClick={onToggleMore} className={tabClass(showMore || moreActive)}>
+            <Ellipsis size={22} strokeWidth={showMore || moreActive ? 2.4 : 1.8} />
+            More
+          </button>
+        </div>
+      </nav>
+    </>
+  );
+}
+
 
 /* ---------------------
    InvitedList helper
@@ -1982,7 +2113,7 @@ function NavButton({ label, active, onClick }) {
     return (
       <div className="space-y-4">
         {/* Color Legend */}
-        <div className="flex gap-4 text-xs bg-neutral-50 p-3 rounded-lg border">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs bg-neutral-50 p-3 rounded-lg border">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-white border-2 border-neutral-300 rounded"></div>
             <span>All proposed speakers available</span>
@@ -2019,9 +2150,9 @@ function NavButton({ label, active, onClick }) {
             
             return (
               <div key={s.id} className={`border rounded-lg p-3 ${bgColor}`}>
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
+                <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
                       <div className="font-semibold">{s.full_name}</div>
                       {isOverdue && (
                         <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-semibold rounded">
@@ -2059,15 +2190,15 @@ function NavButton({ label, active, onClick }) {
                     )}
                   </div>
                   {(currentUserRole === 'Organizer' || canEdit(s)) && (
-                    <div className="space-y-1 ml-3">
+                    <div className="flex gap-2 sm:block sm:space-y-1 sm:ml-3">
                       <button 
                         onClick={() => onResendInvitation(s)} 
-                        className={`px-2 py-1 text-white text-xs rounded w-full ${isOverdue ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-500 hover:bg-emerald-600'}`}
+                        className={`px-3 py-2 sm:px-2 sm:py-1 text-white text-sm sm:text-xs rounded w-full ${isOverdue ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-500 hover:bg-emerald-600'}`}
                       >
                         {isOverdue ? 'Resend (Overdue)' : 'Resend'}
                       </button>
                       {currentUserRole === 'Organizer' && (
-                        <button onClick={() => onDeleteInvited(s.id)} className="px-2 py-1 bg-red-500 text-white text-xs rounded w-full hover:bg-red-600">Delete</button>
+                        <button onClick={() => onDeleteInvited(s.id)} className="px-3 py-2 sm:px-2 sm:py-1 bg-red-500 text-white text-sm sm:text-xs rounded w-full hover:bg-red-600">Delete</button>
                       )}
                     </div>
                   )}
@@ -2083,6 +2214,21 @@ function NavButton({ label, active, onClick }) {
 /* ---------------------
    LoginView & SignupView
    --------------------- */
+function resetFollowUpText(userName, link) {
+  return `Dear ${userName || ''},
+
+Here is your link to reset your password for the Barcelona Collaboratorium:
+
+${link}
+
+The link can be used once and expires in about an hour. After choosing a new password you will be taken back to the login page.
+
+If the link has expired, just reply to this message and we'll send you a new one.
+
+Best regards,
+Barcelona Collaboratorium Team`;
+}
+
 function LoginView({ onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -2095,6 +2241,7 @@ function LoginView({ onLogin }) {
         <div className="flex justify-end">
           <button onClick={() => onLogin(email, password)} className="px-4 py-2 bg-primary text-white rounded">Login</button>
         </div>
+        <p className="text-xs text-neutral-500 mt-3">Forgot your password? Contact a seminar organiser to receive a reset link.</p>
       </div>
     </div>
   );
@@ -2259,11 +2406,11 @@ function SignupView({ invitation, onSignup }) {
     };
   
     return (
-      <div className="min-h-screen bg-neutral-50 p-8">
-        <div className="w-full max-w-5xl mx-auto bg-white rounded-lg shadow-lg p-8">
+      <div className="min-h-screen bg-neutral-50 sm:p-8">
+        <div className="w-full max-w-5xl mx-auto bg-white sm:rounded-lg shadow-lg p-5 sm:p-8">
           {/* Header */}
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-primary mb-2">
+            <h1 className="text-2xl sm:text-3xl font-bold text-primary mb-2">
               Barcelona Collaboratorium Seminar Invitation
             </h1>
             <p className="text-neutral-600">
@@ -2347,7 +2494,7 @@ function SignupView({ invitation, onSignup }) {
           <div className="mb-8">
             <h2 className="text-xl font-bold mb-4">Choose Your Preferred Date</h2>
             
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Left: Calendar */}
               <div className="border rounded-lg p-4">
                 {/* Calendar Header */}
@@ -2535,7 +2682,7 @@ function SignupView({ invitation, onSignup }) {
           </div>
   
           {/* Action Buttons */}
-          <div className="flex gap-4 justify-end">
+          <div className="flex flex-col-reverse sm:flex-row gap-3 sm:gap-4 sm:justify-end">
             <button 
               onClick={handleDecline} 
               className="px-6 py-3 border-2 border-neutral-300 text-neutral-700 rounded-lg font-semibold hover:bg-neutral-100 transition-colors"
@@ -2566,7 +2713,7 @@ function SignupView({ invitation, onSignup }) {
               className="bg-white rounded-lg shadow-xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="p-6 border-b flex items-center justify-between bg-primary text-white sticky top-0 z-10">
+              <div className="p-4 sm:p-6 border-b flex items-center justify-between bg-primary text-white sticky top-0 z-10">
                 <h2 className="text-2xl font-bold">Past Speakers</h2>
                 <button 
                   onClick={() => setShowStatistics(false)}
@@ -2777,40 +2924,40 @@ function DashboardView({
       )}
 
       {/* Overview Stats */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-sm text-neutral-500 font-medium">Proposed</div>
-          <div className="text-3xl font-bold text-primary mt-2">{proposedSpeakers.length}</div>
+      <div className="grid grid-cols-4 gap-2 md:gap-4">
+        <div className="bg-white rounded-lg shadow px-2 py-3 sm:p-3 md:p-6">
+          <div className="text-[11px] sm:text-xs md:text-sm text-neutral-500 font-medium truncate">Proposed</div>
+          <div className="text-2xl md:text-3xl font-bold text-primary mt-1 md:mt-2">{proposedSpeakers.length}</div>
         </div>
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-sm text-neutral-500 font-medium">Invited</div>
-          <div className="text-3xl font-bold text-primary mt-2">{invitedSpeakers.length}</div>
+        <div className="bg-white rounded-lg shadow px-2 py-3 sm:p-3 md:p-6">
+          <div className="text-[11px] sm:text-xs md:text-sm text-neutral-500 font-medium truncate">Invited</div>
+          <div className="text-2xl md:text-3xl font-bold text-primary mt-1 md:mt-2">{invitedSpeakers.length}</div>
         </div>
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-sm text-neutral-500 font-medium">Upcoming</div>
-          <div className="text-3xl font-bold text-primary mt-2">{upcomingSpeakers.length}</div>
+        <div className="bg-white rounded-lg shadow px-2 py-3 sm:p-3 md:p-6">
+          <div className="text-[11px] sm:text-xs md:text-sm text-neutral-500 font-medium truncate">Upcoming</div>
+          <div className="text-2xl md:text-3xl font-bold text-primary mt-1 md:mt-2">{upcomingSpeakers.length}</div>
         </div>
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
-          <div className="text-sm text-red-600 font-semibold">Overdue</div>
-          <div className="text-3xl font-bold text-red-600 mt-2">{overdueSpeakers.length}</div>
+        <div className="bg-white rounded-lg shadow px-2 py-3 sm:p-3 md:p-6 border-l-4 border-red-500">
+          <div className="text-[11px] sm:text-xs md:text-sm text-red-600 font-semibold truncate">Overdue</div>
+          <div className="text-2xl md:text-3xl font-bold text-red-600 mt-1 md:mt-2">{overdueSpeakers.length}</div>
         </div>
       </div>
 
       {/* Proposed Speakers - with collapse functionality */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold text-neutral-800">
+      <div className="bg-white rounded-lg shadow p-4 md:p-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+          <h3 className="text-lg md:text-xl font-semibold text-neutral-800">
             Proposed Speakers Awaiting Review ({proposedSpeakers.length})
           </h3>
 
-          <div className="flex gap-2 flex-wrap justify-end">
+          <div className="flex gap-2 flex-wrap md:justify-end">
             {/* sort dropdown (default = votes) */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-600">Sort by</span>
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <span className="text-sm text-neutral-600 whitespace-nowrap">Sort by</span>
               <select
                 value={proposedSortMode}
                 onChange={(e) => setProposedSortMode(e.target.value)}
-                className="border rounded px-2 py-1 text-sm bg-white"
+                className="border rounded px-2 py-1 text-sm bg-white flex-1 min-w-0 md:flex-none"
                 title="Sort proposed speakers"
               >
                 <option value="votes">Votes (then priority)</option>
@@ -2850,34 +2997,35 @@ function DashboardView({
                 >
                   {/* Collapsed View */}
                   {isCollapsed ? (
-                    <div className="p-3 flex items-center justify-between">
-                      <div className="flex items-center gap-4 flex-1">
+                    <div className="p-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex flex-wrap md:flex-nowrap items-center gap-x-4 gap-y-1 flex-1 min-w-0">
                         <span className="text-neutral-500">▶</span>
                         <div className="font-semibold">{s.full_name}</div>
-                        <div className="text-sm text-neutral-600">{s.affiliation}</div>
+                        <div className="text-sm text-neutral-600 basis-full pl-7 md:basis-auto md:pl-0">{s.affiliation}</div>
                         {s.speaker_url && (
                           <a
                             href={normalizeUrl(s.speaker_url)}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-xs text-primary hover:underline break-all"
+                            className="text-xs text-primary hover:underline whitespace-nowrap pl-7 md:pl-0"
                             onClick={(e) => e.stopPropagation()}
                           >
                             Link
                           </a>
                         )}
-                        <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white ${getRankingColor(s.ranking)}`}>
+                        <span className={`px-2 py-1 rounded-full text-xs font-semibold text-white whitespace-nowrap ${getRankingColor(s.ranking)}`}>
                           {s.ranking}
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-wrap items-center gap-2 pl-7 md:pl-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             onVoteSpeaker(s.id, 'upvote');
                           }}
-                          className={`px-3 py-1 rounded text-sm font-medium ${
+                          aria-pressed={userVoted}
+                          className={`px-4 py-2 md:px-3 md:py-1 rounded text-sm font-medium ${
                             userVoted
                               ? 'bg-primary text-white'
                               : 'border border-primary text-primary hover:bg-primary hover:text-white'
@@ -2893,7 +3041,7 @@ function DashboardView({
                                 e.stopPropagation();
                                 onAcceptSpeaker(s.id);
                               }}
-                              className="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600"
+                              className="px-4 py-2 md:px-3 md:py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600"
                             >
                               Invite
                             </button>
@@ -2902,7 +3050,7 @@ function DashboardView({
                                 e.stopPropagation();
                                 onRejectSpeaker(s.id);
                               }}
-                              className="px-3 py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600"
+                              className="px-4 py-2 md:px-3 md:py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600"
                             >
                               Decline
                             </button>
@@ -2915,7 +3063,7 @@ function DashboardView({
                               e.stopPropagation();
                               onEditSpeaker(s);
                             }}
-                            className="px-3 py-1 bg-amber-500 text-white rounded text-sm hover:bg-amber-600"
+                            className="px-4 py-2 md:px-3 md:py-1 bg-amber-500 text-white rounded text-sm hover:bg-amber-600"
                           >
                             Edit
                           </button>
@@ -2924,9 +3072,9 @@ function DashboardView({
                     </div>
                   ) : (
                     /* Expanded View */
-                    <div className="p-4">
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
+                    <div className="p-3 md:p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-start">
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <span className="text-neutral-500">▼</span>
                             <div className="font-semibold text-lg text-neutral-800">{s.full_name}</div>
@@ -2962,12 +3110,13 @@ function DashboardView({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-wrap items-center gap-2 ml-7 md:ml-4" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               onVoteSpeaker(s.id, 'upvote');
                             }}
+                            aria-pressed={userVoted}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                               userVoted
                                 ? 'bg-primary text-white'
@@ -3023,8 +3172,8 @@ function DashboardView({
       </div>
 
       {/* Invited Speakers */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-xl font-semibold mb-4 text-neutral-800">
+      <div className="bg-white rounded-lg shadow p-4 md:p-6">
+        <h3 className="text-lg md:text-xl font-semibold mb-4 text-neutral-800">
           Invited Speakers Awaiting Response ({invitedSpeakers.length})
         </h3>
         <InvitedList
@@ -3042,9 +3191,9 @@ function DashboardView({
       </div>
 
       {/* Confirmed Upcoming Speakers - with travel arrangements highlighting */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-semibold text-neutral-800">
+      <div className="bg-white rounded-lg shadow p-4 md:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-4">
+          <h3 className="text-lg md:text-xl font-semibold text-neutral-800">
             Confirmed Upcoming Speakers ({upcomingSpeakers.length})
           </h3>
           {userRole?.role ==='Organizer' && (
@@ -3060,7 +3209,38 @@ function DashboardView({
         {upcomingSpeakers.length === 0 ? (
           <p className="text-neutral-500 text-center py-8">No upcoming confirmed speakers</p>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          {/* Phones: one card per speaker */}
+          <div className="space-y-3 md:hidden">
+            {upcomingSpeakers.map(s => {
+              const hasTravelArrangements = s.actions?.some(a => a.type === 'travel_arrangements' && a.completed);
+              return (
+                <div key={s.id} className={`border rounded-lg p-3 ${!hasTravelArrangements ? 'bg-amber-50 border-amber-200' : 'border-neutral-200'}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-semibold">{s.full_name}</div>
+                    <div className="text-sm font-medium text-primary-dark whitespace-nowrap">{formatDate(s.assigned_date)}</div>
+                  </div>
+                  <div className="text-sm text-neutral-600 mt-1">{s.talk_title || '(Title TBC)'}</div>
+                  <div className="flex items-center justify-between text-xs mt-2">
+                    <span className="text-neutral-500">Host: {s.host}</span>
+                    {hasTravelArrangements
+                      ? <span className="text-green-600 font-semibold">✓ Travel arranged</span>
+                      : <span className="text-amber-600 font-semibold">⚠ Travel pending</span>}
+                  </div>
+                  {canEditSpeaker(s) && (
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={() => onViewAgenda(s)} className="flex-1 px-3 py-2 bg-purple-500 text-white rounded text-sm">Agenda</button>
+                      <button onClick={() => onEditConfirmed(s)} className="flex-1 px-3 py-2 bg-amber-500 text-white rounded text-sm">Edit</button>
+                      <button onClick={() => onViewActions(s)} className="flex-1 px-3 py-2 bg-sky-500 text-white rounded text-sm">Actions</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Larger screens: table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b-2 border-neutral-200">
@@ -3109,13 +3289,14 @@ function DashboardView({
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
 
       {/* Recent Speaker Responses - AT BOTTOM */}
       {recentResponses.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-xl font-semibold mb-4 text-neutral-800 flex items-center gap-2">
+        <div className="bg-white rounded-lg shadow p-4 md:p-6">
+          <h3 className="text-lg md:text-xl font-semibold mb-4 text-neutral-800 flex items-center gap-2">
             <span className="text-2xl">📬</span>
             Recent Speaker Responses
           </h3>
@@ -3140,7 +3321,7 @@ function DashboardView({
                         <span className="text-2xl">
                           {responseAction.action === 'accepted' ? '✅' : '❌'}
                         </span>
-                        <div>
+                        <div className="min-w-0">
                           <div className="font-semibold text-neutral-800">{speaker.full_name}</div>
                           <div className="text-sm text-neutral-600">
                             {responseAction.action === 'accepted' ? 'accepted' : 'declined'} the invitation
@@ -3305,16 +3486,18 @@ function DashboardView({
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={goToPreviousMonth}
-              className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              className="px-3 sm:px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              aria-label="Previous month"
             >
-              ← Previous
+              ←<span className="hidden sm:inline"> Previous</span>
             </button>
-            <h3 className="text-xl font-semibold">{monthName}</h3>
+            <h3 className="text-lg sm:text-xl font-semibold text-center">{monthName}</h3>
             <button
               onClick={goToNextMonth}
-              className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              className="px-3 sm:px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+              aria-label="Next month"
             >
-              Next →
+              <span className="hidden sm:inline">Next </span>→
             </button>
           </div>
   
@@ -3333,7 +3516,7 @@ function DashboardView({
             <div className="grid grid-cols-7">
               {/* Empty cells for days before month starts */}
               {Array.from({ length: startingDayOfWeek }).map((_, i) => (
-                <div key={`empty-${i}`} className="border-r border-b h-28 bg-neutral-50" />
+                <div key={`empty-${i}`} className="border-r border-b h-16 sm:h-28 bg-neutral-50" />
               ))}
   
               {/* Days of the month */}
@@ -3345,7 +3528,7 @@ function DashboardView({
                   return (
                     <div
                       key={day}
-                      className="border-r border-b h-28 bg-neutral-50 p-2"
+                      className="border-r border-b h-16 sm:h-28 bg-neutral-50 p-2"
                     >
                       <div className="font-semibold text-sm text-neutral-400">{day}</div>
                     </div>
@@ -3357,13 +3540,13 @@ function DashboardView({
                   return (
                     <div
                       key={day}
-                      className="border-r border-b h-28 bg-orange-100 p-2 relative"
+                      className="border-r border-b h-16 sm:h-28 bg-orange-100 p-2 relative"
                     >
                       <div className="font-semibold text-sm text-orange-900">{day}</div>
                       <div className="absolute inset-0 flex items-center justify-center">
                         <div className="text-center">
-                          <div className="text-2xl mb-1">⚠️</div>
-                          <div className="text-xs font-semibold text-orange-800">
+                          <div className="text-lg sm:text-2xl sm:mb-1">⚠️</div>
+                          <div className="hidden sm:block text-xs font-semibold text-orange-800">
                             Conflicting Date
                           </div>
                         </div>
@@ -3376,7 +3559,7 @@ function DashboardView({
                 return (
                   <div
                     key={day}
-                    className="border-r border-b h-28 relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all"
+                    className="border-r border-b h-16 sm:h-28 relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all"
                     onClick={() => handleDateClick(day)}
                   >
                     {/* Day number - top left corner */}
@@ -3395,7 +3578,11 @@ function DashboardView({
                           '#f3f4f6' // gray-100 (not set)
                       }}
                     >
-                      <div className="absolute top-8 left-2 text-xs font-medium max-w-[85%] leading-tight">
+                      <div className="sm:hidden absolute top-6 left-1.5 text-sm font-bold leading-none">
+                        {dateInfo.available === true && <span className="text-green-700">✓</span>}
+                        {dateInfo.available === false && <span className="text-red-700">✗</span>}
+                      </div>
+                      <div className="hidden sm:block absolute top-8 left-2 text-xs font-medium max-w-[85%] leading-tight">
                         {dateInfo.available === true && (
                           <span className="text-green-700 font-semibold">✓ Available</span>
                         )}
@@ -3423,7 +3610,8 @@ function DashboardView({
                         backgroundColor: dateInfo.isLocked ? '#dbeafe' : '#f9fafb' // blue-100 or gray-50
                       }}
                     >
-                      <div className="absolute bottom-2 right-2 text-right text-xs font-medium max-w-[85%] leading-tight">
+                      {dateInfo.isLocked && <div className="sm:hidden absolute bottom-1 right-1 text-xs leading-none">🔒</div>}
+                      <div className="hidden sm:block absolute bottom-2 right-2 text-right text-xs font-medium max-w-[85%] leading-tight">
                         {dateInfo.isLocked ? (
                           <>
                             <div className="text-blue-700 font-semibold">🔒 Locked</div>
@@ -3453,7 +3641,7 @@ function DashboardView({
           {/* Legend */}
           <div className="mt-6 space-y-3">
             <h4 className="font-semibold text-sm text-neutral-700">Legend:</h4>
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <div className="font-medium mb-2">Your Availability (Top-left):</div>
                 <div className="space-y-1">
@@ -3494,8 +3682,8 @@ function DashboardView({
   
         {/* Modal for setting availability */}
         {showDateModal && selectedDate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-4 sm:p-6 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
               <h3 className="text-xl font-semibold mb-4">
                 Set Availability for {monthName} {selectedDate.day}
               </h3>
@@ -3694,7 +3882,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
 
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center mb-4">
           <h3 className="text-xl font-semibold">Fellows Activity Overview</h3>
           
           {/* Fellow Filter Dropdown */}
@@ -3798,16 +3986,18 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
             <div className="flex items-center justify-between mb-4">
               <button
                 onClick={goToPreviousMonth}
-                className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+                className="px-3 sm:px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+                aria-label="Previous month"
               >
-                ← Previous
+                ←<span className="hidden sm:inline"> Previous</span>
               </button>
-              <h3 className="text-xl font-semibold">{monthName}</h3>
+              <h3 className="text-lg sm:text-xl font-semibold text-center">{monthName}</h3>
               <button
                 onClick={goToNextMonth}
-                className="px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+                className="px-3 sm:px-4 py-2 bg-neutral-200 rounded hover:bg-neutral-300"
+                aria-label="Next month"
               >
-                Next →
+                <span className="hidden sm:inline">Next </span>→
               </button>
             </div>
 
@@ -3826,7 +4016,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
               <div className="grid grid-cols-7">
                 {/* Empty cells for days before month starts */}
                 {Array.from({ length: startingDayOfWeek }).map((_, i) => (
-                  <div key={`empty-${i}`} className="border-r border-b p-2 h-24 bg-neutral-50" />
+                  <div key={`empty-${i}`} className="border-r border-b p-1 sm:p-2 h-16 sm:h-24 overflow-hidden bg-neutral-50" />
                 ))}
 
                 {/* Days of the month */}
@@ -3846,7 +4036,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
                   return (
                     <div
                       key={day}
-                      className={`border-r border-b p-2 h-24 ${bgColor} relative`}
+                      className={`border-r border-b p-1 sm:p-2 h-16 sm:h-24 overflow-hidden ${bgColor} relative`}
                     >
                       <div className="font-semibold text-sm mb-1">{day}</div>
                       {dateInfo.hasDate && (
@@ -3878,7 +4068,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
             </div>
 
             {/* Legend */}
-            <div className="mt-4 flex gap-4 text-sm">
+            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 bg-green-50 border"></div>
                 <span>Available</span>
@@ -3907,7 +4097,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
 
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center mb-4">
           <h3 className="text-xl font-semibold">Recent Fellow Activity</h3>
           
           {/* Fellow Filter Dropdown */}
@@ -3989,7 +4179,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
 
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center mb-4">
           <h3 className="text-xl font-semibold">Hosting History</h3>
           
           {/* Fellow Filter Dropdown */}
@@ -4038,8 +4228,8 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
                       return dateB - dateA;
                     })
                     .map(speaker => (
-                    <div key={speaker.id} className="flex justify-between items-center border-l-4 border-blue-500 pl-4 py-2">
-                      <div>
+                    <div key={speaker.id} className="flex justify-between items-center gap-3 border-l-4 border-blue-500 pl-4 py-2">
+                      <div className="min-w-0">
                         <div className="font-medium">{speaker.name}</div>
                         <div className="text-sm text-neutral-600">{speaker.affiliation}</div>
                         {speaker.title && (
@@ -4066,10 +4256,10 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
         <h2 className="text-2xl font-semibold mb-4">Fellows Activity</h2>
         
         {/* Sub-navigation tabs */}
-        <div className="flex gap-2 mb-6 border-b">
+        <div className="flex gap-2 mb-6 border-b overflow-x-auto whitespace-nowrap -mx-1 px-1">
           <button
             onClick={() => setSelectedSubTab('overview')}
-            className={`px-4 py-2 font-medium transition-colors ${
+            className={`px-3 sm:px-4 py-2 font-medium transition-colors shrink-0 ${
               selectedSubTab === 'overview'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-neutral-600 hover:text-neutral-800'
@@ -4079,7 +4269,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
           </button>
           <button
             onClick={() => setSelectedSubTab('availability')}
-            className={`px-4 py-2 font-medium transition-colors ${
+            className={`px-3 sm:px-4 py-2 font-medium transition-colors shrink-0 ${
               selectedSubTab === 'availability'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-neutral-600 hover:text-neutral-800'
@@ -4089,7 +4279,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
           </button>
           <button
             onClick={() => setSelectedSubTab('hosting')}
-            className={`px-4 py-2 font-medium transition-colors ${
+            className={`px-3 sm:px-4 py-2 font-medium transition-colors shrink-0 ${
               selectedSubTab === 'hosting'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-neutral-600 hover:text-neutral-800'
@@ -4099,7 +4289,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
           </button>
           <button
             onClick={() => setSelectedSubTab('activity')}
-            className={`px-4 py-2 font-medium transition-colors ${
+            className={`px-3 sm:px-4 py-2 font-medium transition-colors shrink-0 ${
               selectedSubTab === 'activity'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-neutral-600 hover:text-neutral-800'
@@ -4391,11 +4581,11 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
       <div id="statistics-content">
         <div style={styles.sectionHeader}>
           <h2 style={styles.sectionTitle}>Past Speakers</h2>
-          <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+          <div style={{display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap'}}>
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(e.target.value)}
-              style={{...styles.select, width: 'auto', minWidth: '150px'}}
+              style={{...styles.select, width: 'auto', minWidth: '120px'}}
             >
               <option value="all">All Years</option>
               {availableYears.map(year => (
@@ -4559,9 +4749,9 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
   
         {/* Countries Modal */}
         {showCountriesModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
-              <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[80vh] overflow-hidden flex flex-col">
+              <div className="p-4 sm:p-6 border-b flex items-center justify-between bg-primary text-white shrink-0">
                 <h3 className="text-xl font-semibold">Countries ({Object.keys(countryData).length})</h3>
                 <button 
                   onClick={() => setShowCountriesModal(false)}
@@ -4570,8 +4760,8 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-6 overflow-y-auto max-h-[60vh]">
-                <div className="grid grid-cols-3 gap-4">
+              <div className="p-4 sm:p-6 overflow-y-auto flex-1 sm:max-h-[60vh]">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   {Object.entries(countryData)
                     .sort((a, b) => b[1] - a[1])
                     .map(([country, count]) => (
@@ -4588,9 +4778,9 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
   
         {/* Affiliations Modal */}
         {showAffiliationsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] overflow-hidden">
-              <div className="p-6 border-b flex items-center justify-between bg-primary text-white">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[80vh] overflow-hidden flex flex-col">
+              <div className="p-4 sm:p-6 border-b flex items-center justify-between bg-primary text-white shrink-0">
                 <h3 className="text-xl font-semibold">Different Affiliations ({uniqueAffiliations.length})</h3>
                 <button 
                   onClick={() => setShowAffiliationsModal(false)}
@@ -4599,7 +4789,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-6 overflow-y-auto max-h-[60vh]">
+              <div className="p-4 sm:p-6 overflow-y-auto flex-1 sm:max-h-[60vh]">
                 <div className="space-y-3">
                   {uniqueAffiliations.map(affiliation => (
                     <div key={affiliation} className="border rounded-lg p-4 hover:bg-neutral-50">
@@ -4641,6 +4831,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
                     <span style={{fontSize: '20px'}}>{isCollapsed ? '▶' : '▼'}</span>
                   </h4>
                   {!isCollapsed && (
+                    <div style={{overflowX: 'auto'}}>
                     <table style={styles.table}>
                       <thead>
                         <tr>
@@ -4668,7 +4859,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
                             </tr>
                           ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </div>
               );
@@ -4811,7 +5002,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
         </div>
         
         {/* Legend */}
-        <div className="flex gap-4 mb-6 text-sm">
+        <div className="flex flex-wrap gap-x-4 gap-y-2 mb-6 text-sm">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-green-500 rounded"></div>
             <span>Available</span>
@@ -4831,7 +5022,7 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
         </div>
   
         {/* Two Column Layout */}
-        <div className="grid grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Left: Calendar */}
           <div className="border rounded-lg p-4">
             {/* Header */}
@@ -5010,8 +5201,8 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
         
         {/* Add Date Modal */}
         {showAddDateModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-96">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+            <div className="bg-white rounded-lg shadow-xl p-4 sm:p-6 w-full max-w-sm max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
               <h3 className="text-lg font-semibold mb-4">
                 Add Date: {selectedDate?.toLocaleDateString()}
               </h3>
@@ -5079,8 +5270,8 @@ function FellowsActivityView({ dates, userAvailability, seniorFellows, speakers,
         
         {/* Edit Date Modal */}
         {showEditDateModal && selectedDateEntry && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-96">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+            <div className="bg-white rounded-lg shadow-xl p-4 sm:p-6 w-full max-w-sm max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
               <h3 className="text-lg font-semibold mb-4">
                 Edit Date: {formatDate(selectedDateEntry.date)}
               </h3>
@@ -5356,7 +5547,7 @@ function LockedSpeakersMiniCalendar({ dates, speakers }) {
 
       {/* Speaker Info Modal */}
       {showSpeakerModal && selectedSpeaker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             {/* Header */}
             <div className="p-6 border-b bg-primary text-white">
@@ -5462,7 +5653,7 @@ function LockedSpeakersMiniCalendar({ dates, speakers }) {
                 <div>
                   <h4 className="text-sm font-semibold text-neutral-700 mb-1">Website</h4>
                   <a 
-                    href={selectedSpeaker.speaker_url}
+                    href={normalizeUrl(selectedSpeaker.speaker_url)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary hover:underline break-all"
@@ -5511,7 +5702,23 @@ function LockedSpeakersMiniCalendar({ dates, speakers }) {
       <div className="bg-white rounded shadow p-4">
         <h2 className="text-lg font-medium mb-3">Manage Users</h2>
         {users.length === 0 ? <p className="text-sm text-neutral-500">No users found.</p> : (
-          <table className="w-full text-sm">
+          <>
+          {/* Phones: one card per user */}
+          <div className="space-y-2 md:hidden">
+            {users.map(u => (
+              <div key={u.id} className="border rounded p-3">
+                <div className="font-semibold">{u.full_name}</div>
+                <div className="text-sm text-neutral-600 break-all">{u.email}</div>
+                <div className="text-xs text-neutral-500 mt-0.5">{u.role}</div>
+                <div className="flex gap-2 mt-3">
+                  <button onClick={() => onEditUser(u)} className="flex-1 px-3 py-2 bg-yellow-500 text-white rounded text-sm">Edit</button>
+                  <button onClick={() => onPasswordReset(u.email, u.full_name)} className="flex-1 px-3 py-2 bg-sky-600 text-white rounded text-sm">Reset PW</button>
+                  {u.id !== currentUserId && <button onClick={() => onDeleteUser(u.id, u.email)} className="flex-1 px-3 py-2 bg-red-500 text-white rounded text-sm">Remove</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <table className="hidden md:table w-full text-sm">
             <thead>
               <tr>
                 <th className="py-2">Email</th>
@@ -5535,6 +5742,7 @@ function LockedSpeakersMiniCalendar({ dates, speakers }) {
               ))}
             </tbody>
           </table>
+          </>
         )}
       </div>
     );
@@ -5638,22 +5846,22 @@ function LockedSpeakersMiniCalendar({ dates, speakers }) {
 function ProposeSpeakerView({ onAddSpeaker, speakers, onEditSpeaker, onDeleteSpeaker, getRankingColor, getStatusColor, formatDate }) {
   return (
     <div className="bg-white rounded shadow p-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between gap-3 mb-3">
         <h2 className="text-lg font-medium">My Proposals</h2>
-        <button onClick={onAddSpeaker} className="px-3 py-1 bg-primary text-white rounded">Propose Speaker</button>
+        <button onClick={onAddSpeaker} className="px-4 py-2 sm:px-3 sm:py-1 bg-primary text-white rounded font-medium sm:font-normal whitespace-nowrap">+ Propose Speaker</button>
       </div>
       {speakers.length === 0 ? <p className="text-sm text-neutral-500">You have not proposed any speakers.</p> : (
         <div className="space-y-2">
           {speakers.map(s => (
-            <div key={s.id} className="border rounded p-3 flex justify-between">
-              <div>
+            <div key={s.id} className="border rounded p-3 flex justify-between gap-3">
+              <div className="min-w-0">
                 <div className="font-semibold">{s.full_name}</div>
                 <div className="text-sm text-neutral-600">{s.area_of_expertise} • {s.affiliation}</div>
                 <div className="text-xs mt-1"><span className="font-medium">Status:</span> <span className={getStatusColor(s.status)}>{s.status}</span></div>
               </div>
               <div className="flex flex-col gap-2">
-                <button onClick={() => onEditSpeaker(s)} className="px-2 py-1 bg-yellow-500 text-white rounded text-xs">Edit</button>
-                <button onClick={() => onDeleteSpeaker(s.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">Delete</button>
+                <button onClick={() => onEditSpeaker(s)} className="px-3 py-2 sm:px-2 sm:py-1 bg-yellow-500 text-white rounded text-sm sm:text-xs">Edit</button>
+                <button onClick={() => onDeleteSpeaker(s.id)} className="px-3 py-2 sm:px-2 sm:py-1 bg-red-500 text-white rounded text-sm sm:text-xs">Delete</button>
               </div>
             </div>
           ))}
@@ -5851,7 +6059,7 @@ function ProfileView({ userRole, onEditProfile }) {
     };
   
     return (
-      <div style={styles.sidebar}>
+      <div style={styles.sidebar} className="actions-sidebar">
         <div style={{
           padding: '20px',
           borderBottom: '2px solid #e0e0e0',
@@ -6739,8 +6947,8 @@ function AddDateForm({ onSubmit, onCancel, existingDates, formatDate }) {
   const [form, setForm] = useState({ date: '', type: 'available', host: '', notes: '' });
   const handle = (e) => { e.preventDefault(); onSubmit(form); };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-semibold mb-4">Add Available Date</h3>
         <form onSubmit={handle} className="space-y-4">
           <div>
@@ -6978,14 +7186,15 @@ const livePossibleDuplicate = useMemo(() => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded shadow w-full max-w-2xl">
-        <div className="p-4 border-b flex items-center justify-between">
+    <div className="fixed inset-0 bg-black/50 flex items-stretch sm:items-center justify-center sm:p-4 z-50">
+      {/* Full screen on phones, centred pop-up on larger screens; the body scrolls */}
+      <div className="bg-white sm:rounded shadow w-full max-w-2xl flex flex-col h-full sm:h-auto sm:max-h-[90vh]">
+        <div className="p-4 border-b flex items-center justify-between shrink-0">
           <h3 className="text-lg font-semibold">Propose a Speaker</h3>
           <button onClick={onCancel} className="px-3 py-1 border rounded">Close</button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 flex-1 overflow-y-auto overscroll-contain">
 
           {/* ✅ NEW: Search existing speakers */}
           <div className="border rounded p-3 bg-neutral-50">
@@ -7003,8 +7212,8 @@ const livePossibleDuplicate = useMemo(() => {
                   const dateLabel = date ? formatDate(date) : null;
 
                   return (
-                    <div key={s.id} className="bg-white border rounded p-2 flex items-start justify-between">
-                      <div>
+                    <div key={s.id} className="bg-white border rounded p-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
                         <div className="font-semibold">{s.full_name}</div>
                         <div className="text-sm text-neutral-600">
                           {s.affiliation}{s.area_of_expertise ? ` • ${s.area_of_expertise}` : ""}
@@ -7055,7 +7264,7 @@ const livePossibleDuplicate = useMemo(() => {
           )}
 
           {/* Existing form (keep your current fields; below is your same structure) */}
-          <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+          <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm block mb-1">Full Name *</label>
               <input
@@ -7100,7 +7309,7 @@ const livePossibleDuplicate = useMemo(() => {
               </select>
             </div>
 
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="text-sm block mb-1">Area of Expertise *</label>
               <input
                 required
@@ -7110,15 +7319,22 @@ const livePossibleDuplicate = useMemo(() => {
               />
             </div>
 
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="text-sm block mb-1">Speaker URL *</label>
               <input
                 required
-                className="w-full border rounded px-3 py-2"
+                type="text"
+                inputMode="url"
+                autoComplete="url"
+                className={`w-full border rounded px-3 py-2 ${form.speaker_url && !isValidUrl(form.speaker_url) ? 'border-red-400' : ''}`}
                 value={form.speaker_url}
                 onChange={(e) => setForm({ ...form, speaker_url: e.target.value })}
-                placeholder="https://..."
+                onBlur={() => form.speaker_url && setForm((f) => ({ ...f, speaker_url: normalizeUrl(f.speaker_url) }))}
+                placeholder="e.g. www.university.edu/people/jane-doe"
               />
+              {form.speaker_url && !isValidUrl(form.speaker_url) && (
+                <p className="text-xs text-red-600 mt-1">This doesn't look like a valid web address.</p>
+              )}
             </div>
 
             <div>
@@ -7151,7 +7367,7 @@ const livePossibleDuplicate = useMemo(() => {
               </select>
             </div>
 
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="text-sm block mb-1">Preferred date (optional)</label>
               <select
                 className="w-full border rounded px-3 py-2"
@@ -7173,7 +7389,7 @@ const livePossibleDuplicate = useMemo(() => {
               )}
             </div>
 
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="text-sm block mb-1">Notes (optional)</label>
               <textarea
                 className="w-full border rounded px-3 py-2 min-h-[90px]"
@@ -7182,11 +7398,12 @@ const livePossibleDuplicate = useMemo(() => {
               />
             </div>
 
-            <div className="col-span-2 flex justify-end gap-2 pt-2">
-              <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">
+            {/* Buttons stay visible at the bottom while scrolling on phones */}
+            <div className="sm:col-span-2 flex justify-end gap-2 pt-3 pb-4 sticky -bottom-4 -mx-4 -mb-4 px-4 bg-white border-t">
+              <button type="button" onClick={onCancel} className="flex-1 sm:flex-none px-3 py-3 sm:py-2 border rounded">
                 Cancel
               </button>
-              <button type="submit" className="px-3 py-2 bg-primary text-white rounded">
+              <button type="submit" className="flex-1 sm:flex-none px-3 py-3 sm:py-2 bg-primary text-white rounded font-medium sm:font-normal">
                 Submit proposal
               </button>
             </div>
@@ -7209,11 +7426,11 @@ function AddPastSpeakerForm({ onSubmit, onCancel, seniorFellows, countries }) {
   const [form, setForm] = useState({ full_name: '', email: '', affiliation: '', country: '', area_of_expertise: '', host: '', assigned_date: '', talk_title: '', talk_abstract: '' });
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-semibold mb-4">Add Past Speaker</h3>
-        <form onSubmit={submit} className="grid grid-cols-2 gap-4">
-          <input className="col-span-2 border rounded px-3 py-2" placeholder="Full name" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
+        <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <input className="sm:col-span-2 border rounded px-3 py-2" placeholder="Full name" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required />
           <input className="border rounded px-3 py-2" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
           <input className="border rounded px-3 py-2" placeholder="Affiliation" value={form.affiliation} onChange={e => setForm({ ...form, affiliation: e.target.value })} required />
           <select className="border rounded px-3 py-2" value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} required>
@@ -7227,8 +7444,8 @@ function AddPastSpeakerForm({ onSubmit, onCancel, seniorFellows, countries }) {
           </select>
           <input type="date" className="border rounded px-3 py-2" value={form.assigned_date} onChange={e => setForm({ ...form, assigned_date: e.target.value })} required />
           <input className="border rounded px-3 py-2" placeholder="Talk title" value={form.talk_title} onChange={e => setForm({ ...form, talk_title: e.target.value })} />
-          <textarea className="col-span-2 border rounded px-3 py-2" placeholder="Talk abstract" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
-          <div className="col-span-2 flex justify-end gap-2">
+          <textarea className="sm:col-span-2 border rounded px-3 py-2" placeholder="Talk abstract" value={form.talk_abstract} onChange={e => setForm({ ...form, talk_abstract: e.target.value })} />
+          <div className="sm:col-span-2 flex justify-end gap-2">
             <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
             <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Add Past Speaker</button>
           </div>
@@ -7284,8 +7501,8 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow-lg p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-semibold mb-4 text-primary">Add Confirmed Speaker</h3>
         <p className="text-sm text-neutral-600 mb-4">
           Use this form to manually add a speaker who has already confirmed their participation.
@@ -7295,9 +7512,9 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
           {/* Basic Information */}
           <div className="border-b pb-4">
             <h4 className="font-semibold text-neutral-700 mb-3">Basic Information</h4>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <input 
-                className="col-span-2 border rounded px-3 py-2" 
+                className="sm:col-span-2 border rounded px-3 py-2" 
                 placeholder="Full name *" 
                 value={form.full_name} 
                 onChange={e => setForm({ ...form, full_name: e.target.value })} 
@@ -7364,7 +7581,7 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
           {/* Scheduling */}
           <div className="border-b pb-4">
             <h4 className="font-semibold text-neutral-700 mb-3">Scheduling</h4>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <select 
                 className="border rounded px-3 py-2" 
                 value={form.host} 
@@ -7447,6 +7664,7 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
       affiliation: speaker.affiliation || '',
       country: speaker.country || '',
       area_of_expertise: speaker.area_of_expertise || '',
+      speaker_url: speaker.speaker_url || speaker.url || '',
       ranking: speaker.ranking || 'Medium Priority',
       host: speaker.host || '',
       // Images (added only through editing)
@@ -7482,13 +7700,13 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
     };
   
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
           <h3 className="text-xl font-semibold mb-4">Edit Speaker</h3>
   
-          <form onSubmit={submit} className="grid grid-cols-2 gap-4">
+          <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <input
-              className="col-span-2 border rounded px-3 py-2"
+              className="sm:col-span-2 border rounded px-3 py-2"
               value={form.full_name}
               onChange={e => setForm({ ...form, full_name: e.target.value })}
               required
@@ -7525,6 +7743,22 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
               onChange={e => setForm({ ...form, area_of_expertise: e.target.value })}
               required
             />
+
+            <div className="sm:col-span-2">
+              <input
+                required
+                type="text"
+                inputMode="url"
+                placeholder="Speaker URL (e.g. www.university.edu/people/jane-doe)"
+                className={`w-full border rounded px-3 py-2 ${form.speaker_url && !isValidUrl(form.speaker_url) ? 'border-red-400' : ''}`}
+                value={form.speaker_url}
+                onChange={e => setForm({ ...form, speaker_url: e.target.value })}
+                onBlur={() => form.speaker_url && setForm(f => ({ ...f, speaker_url: normalizeUrl(f.speaker_url) }))}
+              />
+              {form.speaker_url && !isValidUrl(form.speaker_url) && (
+                <p className="text-xs text-red-600 mt-1">This doesn't look like a valid web address.</p>
+              )}
+            </div>
   
             <select
               className="border rounded px-3 py-2"
@@ -7551,10 +7785,10 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
             </select>
   
             {/* Images are only editable here (NOT when proposing a new speaker) */}  
-            <div className="col-span-2 border-t pt-4 mt-2">
+            <div className="sm:col-span-2 border-t pt-4 mt-2">
               <div className="text-sm font-semibold mb-2">Images (optional)</div>
   
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm block mb-1">Mugshot (square)</label>
                   <input
@@ -7595,7 +7829,7 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
               </p>
             </div>
   
-            <div className="col-span-2 flex justify-end gap-2">
+            <div className="sm:col-span-2 flex justify-end gap-2">
               <button type="button" onClick={onCancel} className="px-3 py-2 border rounded">Cancel</button>
               <button type="submit" className="px-3 py-2 bg-primary text-white rounded">Save Changes</button>
             </div>
@@ -7691,8 +7925,8 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
     const availableHosts = getAvailableHosts(form.new_date_id);
   
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-lg shadow p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
           <h3 className="text-xl font-semibold mb-4">Edit Confirmed Speaker</h3>
   
           <form onSubmit={submit} className="space-y-4">
@@ -7719,7 +7953,7 @@ function AddConfirmedSpeakerForm({ onSubmit, onCancel, seniorFellows, countries,
             <div className="border rounded p-4 bg-gray-50">
               <div className="text-sm font-semibold mb-2">Images (optional)</div>
   
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm block mb-1">Mugshot (square)</label>
                   <input
@@ -7850,8 +8084,8 @@ function InviteUserForm({ onSubmit, onCancel }) {
   const [form, setForm] = useState({ email: '', full_name: '', affiliation: '', role: 'Senior Fellow' });
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-lg">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-lg max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-semibold mb-4">Create User Invitation</h3>
         <form onSubmit={submit} className="space-y-3">
           <input required className="w-full border rounded px-3 py-2" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
@@ -7879,8 +8113,8 @@ function EditUserForm({ user, onSubmit, onCancel }) {
   const [form, setForm] = useState({ full_name: user.full_name, affiliation: user.affiliation || '', role: user.role });
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-md max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-semibold mb-4">Edit User</h3>
         <form onSubmit={submit} className="space-y-3">
           <div>
@@ -7920,8 +8154,8 @@ function EditProfileForm({ userRole, onSubmit, onCancel }) {
   const [form, setForm] = useState({ full_name: userRole.full_name, affiliation: userRole.affiliation || '' });
   const submit = (e) => { e.preventDefault(); onSubmit(form); };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow p-6 w-full max-w-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6 w-full max-w-md max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-semibold mb-4">Edit My Profile</h3>
         <form onSubmit={submit} className="space-y-3">
           <div>
@@ -8161,6 +8395,8 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '12px',
     marginBottom: '20px',
   },
   sectionTitle: {
@@ -8182,7 +8418,7 @@ const styles = {
   },
   statsGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 45%), 1fr))',
     gap: '20px',
     marginBottom: '30px',
   },
@@ -8206,7 +8442,7 @@ const styles = {
   },
   chartsGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(400px, 100%), 1fr))',
     gap: '25px',
     marginBottom: '30px',
   },
